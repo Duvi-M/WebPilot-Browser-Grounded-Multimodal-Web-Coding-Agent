@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webpilot"
+version = "0.1.0"
+description = "Browser-grounded multimodal web coding agent prototype foundation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["playwright==1.56.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["webpilot*"]
+exclude = ["runs*", "tmp*", "tests*", "examples*"]
+
+[tool.setuptools.package-data]
+webpilot = ["tasks/*.json", "examples/buggy_repair_app/*", "examples/buggy_repair_app/src/*"]

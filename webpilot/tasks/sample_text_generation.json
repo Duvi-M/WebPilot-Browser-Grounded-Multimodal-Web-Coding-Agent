@@ -1,0 +1,17 @@
+{
+  "id": "task_001",
+  "type": "text_generation",
+  "instruction": "Build a responsive landing page for a task management app with a hero section, pricing cards, and a contact form.",
+  "repo_path": null,
+  "expected_behaviors": [
+    "The page includes a hero section with a clear CTA button.",
+    "The page includes pricing cards for multiple plans.",
+    "The page includes a contact form with name, email, and message inputs."
+  ],
+  "test_hints": [
+    "Check that a CTA button is visible.",
+    "Check that pricing cards render.",
+    "Check that the contact form exposes name, email, and message fields."
+  ]
+}
+

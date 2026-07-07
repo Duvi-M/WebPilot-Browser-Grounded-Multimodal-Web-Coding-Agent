@@ -1,0 +1,18 @@
+{
+  "id": "task_002",
+  "type": "diagnostic_repair",
+  "instruction": "Diagnose why the CTA button does not respond and look for console errors.",
+  "repo_path": "webpilot/examples/buggy_repair_app",
+  "expected_behaviors": [
+    "The CTA button should respond to clicks.",
+    "The contact form should include name, email, and message fields.",
+    "Submitting the contact form should show visible feedback.",
+    "The app should not show runtime console errors.",
+    "The mobile viewport should not have horizontal overflow."
+  ],
+  "test_hints": [
+    "Inspect click handlers and runtime errors.",
+    "Check form fields and submit feedback.",
+    "Check scrollWidth on a mobile viewport."
+  ]
+}
