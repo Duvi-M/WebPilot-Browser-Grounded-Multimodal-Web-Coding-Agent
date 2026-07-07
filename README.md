@@ -1,5 +1,7 @@
 # WebPilot: Browser-Grounded Multimodal Web Coding Agent
 
+[Прогресс по требованиям проекта](PROJECT_PROGRESS_RU.md)
+
 WebPilot is a research/prototype project for a web coding agent that closes the loop between code generation and real browser evidence.
 
 The MVP loop is:
