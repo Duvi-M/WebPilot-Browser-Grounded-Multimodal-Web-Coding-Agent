@@ -11,7 +11,7 @@ class Repairer:
     """Applies localized file edits for known browser-feedback failure types."""
 
     def repair(self, reflection: dict[str, Any], workspace_path: Path) -> dict[str, Any]:
-        failure_types = list(reflection.get("likely_failure_types", []))
+        failure_types = _normalize_failure_types(list(reflection.get("likely_failure_types", [])))
         plan: dict[str, Any] = {
             "repairs_attempted": failure_types,
             "repairs_applied": [],
@@ -133,6 +133,16 @@ def _find_form_file(workspace_path: Path) -> Path | None:
         if "<form" in path.read_text(encoding="utf-8"):
             return path
     return None
+
+
+def _normalize_failure_types(failure_types: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for failure_type in failure_types:
+        if failure_type == "missing_submit_feedback" and "submit_button_no_handler" in failure_types:
+            continue
+        if failure_type not in normalized:
+            normalized.append(failure_type)
+    return normalized
 
 
 def _insert_after_function_open(source: str, insertion: str) -> str:

@@ -23,4 +23,10 @@ include = ["webpilot*"]
 exclude = ["runs*", "tmp*", "tests*", "examples*"]
 
 [tool.setuptools.package-data]
-webpilot = ["tasks/*.json", "examples/buggy_repair_app/*", "examples/buggy_repair_app/src/*"]
+webpilot = [
+    "tasks/*.json",
+    "examples/buggy_repair_app/*",
+    "examples/buggy_repair_app/src/*",
+    "examples/buggy_nav_app/*",
+    "examples/buggy_nav_app/src/*",
+]

@@ -22,14 +22,22 @@ class InteractionTester:
     """Runs deterministic checks without aborting the whole iteration on failures."""
 
     def run(self, page: Any, task: Task) -> list[TestResult]:
+        source = _task_text(task)
         results: list[TestResult] = []
         results.append(self._safe("page_loaded", lambda: self._page_loaded(page)))
         results.append(self._safe("expected_sections_visible", lambda: self._expected_sections(page, task)))
+        if _mentions(source, "dashboard", "sidebar", "data table", "stats"):
+            results.append(self._safe("dashboard_expected_content", lambda: self._dashboard_content(page)))
+        if _mentions(source, "nav menu", "navigation menu", "menu opens", "toggle"):
+            results.append(self._safe("nav_menu_opens", lambda: self._nav_menu_opens(page)))
         results.append(self._safe("buttons_exist", lambda: self._buttons_exist(page)))
         results.append(self._safe("buttons_clickable_no_page_error", lambda: self._buttons_clickable(page)))
-        results.append(self._safe("form_has_name_email_message", lambda: self._form_fields(page)))
-        results.append(self._safe("cta_click_does_not_crash", lambda: self._cta_click(page)))
-        results.append(self._safe("submit_shows_feedback", lambda: self._submit_feedback(page)))
+        if _mentions(source, "form", "contact", "email", "message"):
+            results.append(self._safe("form_has_name_email_message", lambda: self._form_fields(page)))
+        if _mentions(source, "cta", "start", "choose"):
+            results.append(self._safe("cta_click_does_not_crash", lambda: self._cta_click(page)))
+        if _mentions(source, "submit", "form", "message sent"):
+            results.append(self._safe("submit_shows_feedback", lambda: self._submit_feedback(page)))
         results.append(self._safe("mobile_has_no_horizontal_overflow", lambda: self._mobile_overflow(page)))
         return results
 
@@ -62,6 +70,37 @@ class InteractionTester:
     def _buttons_exist(self, page: Any) -> TestResult:
         count = page.locator("button, a.cta-button, [role=button]").count()
         return TestResult("buttons_exist", count > 0, f"Found {count} button-like elements.")
+
+    def _dashboard_content(self, page: Any) -> TestResult:
+        missing: list[str] = []
+        sidebar_count = page.locator("aside, nav, [aria-label]").count()
+        sidebar_text_count = page.locator("text=/sidebar|overview|reports/i").count()
+        if sidebar_count == 0 and sidebar_text_count == 0:
+            missing.append("sidebar navigation")
+        if page.locator("table").count() == 0:
+            missing.append("data table")
+        elif page.locator("table tbody tr, table tr").count() < 3:
+            missing.append("at least 3 table rows")
+        if page.locator("text=/stats|revenue|users|conversion|summary/i").count() == 0:
+            missing.append("summary stats")
+        if missing:
+            return TestResult("dashboard_expected_content", False, f"Missing dashboard content: {', '.join(missing)}.")
+        return TestResult("dashboard_expected_content", True, "Found sidebar, data table, and summary stats.")
+
+    def _nav_menu_opens(self, page: Any) -> TestResult:
+        before_text = page.locator("body").inner_text(timeout=2000)
+        toggle = page.locator(
+            'button:has-text("Menu"), button:has-text("Open"), button[aria-label*="menu" i], button[aria-controls]'
+        ).first
+        if toggle.count() == 0:
+            return TestResult("nav_menu_opens", False, "No nav menu toggle button found.")
+        toggle.click(timeout=2000)
+        page.wait_for_timeout(300)
+        after_text = page.locator("body").inner_text(timeout=2000)
+        menu_visible = page.locator('[role="menu"]:visible, .menu-open:visible, .nav-menu.open:visible, nav a:visible').count() > 0
+        if after_text != before_text or menu_visible:
+            return TestResult("nav_menu_opens", True, "Menu content appeared after clicking the toggle.")
+        return TestResult("nav_menu_opens", False, "Clicking the nav toggle did not reveal menu content.")
 
     def _buttons_clickable(self, page: Any) -> TestResult:
         before_errors = len(page.context._webpilot_page_errors) if hasattr(page.context, "_webpilot_page_errors") else 0
@@ -136,3 +175,10 @@ class InteractionTester:
         if locator.count() > 0:
             locator.fill(value, timeout=1500)
 
+
+def _task_text(task: Task) -> str:
+    return " ".join([task.instruction, *task.expected_behaviors, *task.test_hints]).lower()
+
+
+def _mentions(source: str, *keywords: str) -> bool:
+    return any(keyword in source for keyword in keywords)

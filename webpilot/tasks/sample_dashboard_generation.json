@@ -1,0 +1,17 @@
+{
+  "id": "task_003",
+  "type": "text_generation",
+  "instruction": "Build a simple analytics dashboard with a sidebar navigation, a data table showing at least 3 rows, and a summary stats bar at the top.",
+  "repo_path": null,
+  "expected_behaviors": [
+    "A sidebar navigation exists.",
+    "A summary stats bar is visible at the top.",
+    "A data table with at least 3 rows is visible."
+  ],
+  "test_hints": [
+    "Check for sidebar navigation.",
+    "Check for summary stats.",
+    "Check for a table with at least 3 rows."
+  ]
+}
+

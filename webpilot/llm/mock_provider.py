@@ -8,7 +8,8 @@ from webpilot.llm.base import LLMProvider
 class MockLLMProvider(LLMProvider):
     """A no-network provider that returns deterministic text."""
 
+    provider_name = "mock"
+
     def complete(self, prompt: str) -> str:
         normalized = " ".join(prompt.strip().split())
         return f"mock-response:{normalized[:120]}"
-

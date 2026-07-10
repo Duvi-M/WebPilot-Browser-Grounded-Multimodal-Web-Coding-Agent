@@ -14,8 +14,8 @@ implement -> execute -> inspect -> repair
 
 ```mermaid
 flowchart LR
-    task["Task input<br/>text generation or diagnostic repair"] --> planner["Planner<br/>structured implementation plan"]
-    planner --> coder["Coder<br/>generate Vite + React app<br/>or copy repair workspace"]
+    task["Task input<br/>generation, editing,<br/>or diagnostic repair"] --> planner["Planner<br/>structured implementation plan"]
+    planner --> coder["Coder<br/>generate app, copy/edit repo,<br/>or copy repair workspace"]
     coder --> workspace["Generated workspace<br/>package.json, React source, CSS"]
 
     workspace --> executor["Browser Executor<br/>npm install + Vite dev server<br/>Playwright Chromium"]
@@ -39,6 +39,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 ## What Step 2 Supports
 
 - Text-guided generation of a minimal Vite + React app.
+- Instruction-guided editing of an existing Vite + React app for a small deterministic pattern set.
 - Diagnostic repair using a local broken fixture.
 - Browser execution with Playwright and Chromium.
 - Dynamic Vite dev-server ports.
@@ -47,10 +48,20 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - Console log and page error capture.
 - Basic Playwright interaction checks.
 - Deterministic browser-feedback repairs for known failure types.
+- Optional OpenAI-backed planning and code generation for `text_generation` tasks.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
 
-Out of scope for this MVP: full editing tasks, vision-guided generation, vision-guided editing, OpenAI/local model providers, WebCompass integration, visual-reflection/test-synthesis variants, backend, database, authentication, deployment.
+Out of scope for this MVP: general-purpose editing, vision-guided generation, vision-guided editing, local model providers, WebCompass integration, visual-reflection/test-synthesis variants, backend, database, authentication, deployment.
+
+## Known Limitations
+
+- The repairer handles only a fixed set of hardcoded failure patterns: missing form fields, missing submit feedback, missing submit handler, and mobile horizontal overflow. Other failures are reported as `no_automated_repair_available`.
+- Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, and add a simple CTA button. It is not a general code editing engine yet.
+- With `--llm-provider openai`, Planner and Coder become LLM-driven for generation tasks, but the Repairer remains deterministic for now.
+- Chromium is launched with sandbox workaround args by default: `--no-sandbox` and `--disable-setuid-sandbox`. Set `WEBPILOT_DISABLE_CHROMIUM_SANDBOX_ARGS=1` to disable those args on systems where the browser sandbox works normally.
+- `patch_quality` and `visual_quality` are placeholder metrics and currently return `None`.
+- Generated repairs are deterministic string edits, not robust AST-aware code transformations.
 
 ## Requirements
 
@@ -72,6 +83,19 @@ python -m playwright install chromium
 python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant base --max-iterations 1
 ```
 
+Mock mode is the default and does not call any external API:
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant base --max-iterations 1 --llm-provider mock
+```
+
+To use OpenAI for planning and generation, set an API key and opt in explicitly. Real API calls cost money.
+
+```bash
+export OPENAI_API_KEY="..."
+python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant browser-feedback --max-iterations 3 --llm-provider openai
+```
+
 ## Run Browser Feedback
 
 ```bash
@@ -85,6 +109,14 @@ python -m webpilot.cli run --task webpilot/tasks/sample_diagnostic_repair.json -
 ```
 
 The diagnostic task copies `webpilot/examples/buggy_repair_app` into the run workspace, executes it, detects missing form/feedback/overflow issues, and applies deterministic repairs when possible.
+
+## Run Editing
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_editing_task.json --variant base --max-iterations 1
+```
+
+The editing task copies `webpilot/examples/editable_landing_app` into the run workspace and applies a deterministic localized edit. The sample adds `TestimonialsSection.jsx`, imports it into `src/App.jsx`, renders it below pricing, and appends matching CSS.
 
 ## Run Evaluation
 

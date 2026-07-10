@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import shutil
 from typing import Any
 
 from webpilot.agent.planner import Plan
 from webpilot.agent.repairer import Repairer
+from webpilot.llm.base import LLMProvider, LLMProviderError
+from webpilot.llm.mock_provider import MockLLMProvider
 from webpilot.task_schema import Task
 
 
@@ -22,15 +25,54 @@ class CoderResult:
 class Coder:
     """Creates concrete workspaces from plans."""
 
+    def __init__(self, llm_provider: LLMProvider | None = None) -> None:
+        self.llm_provider = llm_provider or MockLLMProvider()
+
     def code(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
         if task.type == "text_generation":
+            if _uses_llm(self.llm_provider):
+                return self._generate_react_app_with_llm(task, plan, workspace_path)
             return self._generate_react_app(task, plan, workspace_path)
+        if task.type == "editing":
+            result = self._copy_existing_workspace(task, workspace_path, "Copied editable repository.")
+            edit_result = self.apply_edit(plan, workspace_path)
+            generated_files = sorted(set(result.generated_files + edit_result["files_touched"]))
+            return CoderResult(
+                workspace_path=workspace_path,
+                generated_files=generated_files,
+                message="Copied repository and applied deterministic edit.",
+            )
         return self._copy_repair_workspace(task, workspace_path)
 
-    def apply_repair(self, patch_plan: dict[str, Any], workspace_path: Path | None = None) -> dict[str, Any] | str:
+    def apply_repair(self, patch_plan: dict[str, Any], workspace_path: Path | None = None) -> dict[str, Any]:
         if workspace_path is None:
-            return "not implemented in step 1"
+            raise ValueError("workspace_path is required to apply a repair")
         return Repairer().repair(patch_plan, workspace_path)
+
+    def apply_edit(self, plan: Plan, workspace_path: Path | None = None) -> dict[str, Any]:
+        if workspace_path is None:
+            raise ValueError("workspace_path is required to apply an edit")
+
+        files_touched: list[str] = []
+        messages: list[str] = []
+        for item in plan.items:
+            if item.name == "TestimonialsSection":
+                files_touched.extend(_apply_testimonials_edit(workspace_path))
+                messages.append("Added testimonials section after pricing.")
+            elif item.name == "FAQSection":
+                files_touched.extend(_apply_faq_edit(workspace_path))
+                messages.append("Added FAQ section before contact.")
+            elif item.name == "CTAButton":
+                files_touched.extend(_apply_cta_button_edit(workspace_path, item.details.get("label", "Get started")))
+                messages.append("Added CTA button to the hero section.")
+            else:
+                messages.append(f"No deterministic edit implemented for {item.name}.")
+
+        return {
+            "edits_applied": bool(files_touched),
+            "files_touched": sorted(set(files_touched)),
+            "messages": messages,
+        }
 
     def _generate_react_app(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
         workspace_path.mkdir(parents=True, exist_ok=True)
@@ -71,9 +113,33 @@ class Coder:
             message="Generated a Vite + React workspace.",
         )
 
+    def _generate_react_app_with_llm(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        prompt = _code_prompt(task, plan)
+        try:
+            files = _parse_file_map(self.llm_provider.complete(prompt))
+        except (json.JSONDecodeError, ValueError, LLMProviderError) as exc:
+            raise LLMProviderError(f"LLM coder returned invalid file JSON: {exc}") from exc
+
+        generated: list[str] = []
+        for relative_path, content in files.items():
+            file_path = _safe_workspace_path(workspace_path, relative_path)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            generated.append(relative_path)
+
+        return CoderResult(
+            workspace_path=workspace_path,
+            generated_files=sorted(generated),
+            message="Generated a Vite + React workspace with LLM provider.",
+        )
+
     def _copy_repair_workspace(self, task: Task, workspace_path: Path) -> CoderResult:
+        return self._copy_existing_workspace(task, workspace_path, "Copied diagnostic repair repository.")
+
+    def _copy_existing_workspace(self, task: Task, workspace_path: Path, message: str) -> CoderResult:
         if task.repo_path is None:
-            raise ValueError("diagnostic_repair tasks require repo_path")
+            raise ValueError(f"{task.type} tasks require repo_path")
 
         source = Path(task.repo_path).expanduser().resolve()
         if not source.exists() or not source.is_dir():
@@ -91,8 +157,212 @@ class Coder:
         return CoderResult(
             workspace_path=workspace_path,
             generated_files=sorted(copied_files),
-            message="Copied diagnostic repair repository; repair patching is deferred to step 2.",
+            message=message,
         )
+
+
+def _apply_testimonials_edit(workspace_path: Path) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    css_path = workspace_path / "src" / "App.css"
+    component_path = workspace_path / "src" / "components" / "TestimonialsSection.jsx"
+
+    component_path.parent.mkdir(parents=True, exist_ok=True)
+    component_path.write_text(_testimonials_section(), encoding="utf-8")
+    _ensure_import(app_path, "TestimonialsSection")
+    _insert_component_after_section(app_path, "pricing-section", "TestimonialsSection")
+    _append_css_once(css_path, "testimonials-section", _testimonials_css())
+    return [
+        "src/App.jsx",
+        "src/App.css",
+        "src/components/TestimonialsSection.jsx",
+    ]
+
+
+def _apply_faq_edit(workspace_path: Path) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    css_path = workspace_path / "src" / "App.css"
+    component_path = workspace_path / "src" / "components" / "FAQSection.jsx"
+
+    component_path.parent.mkdir(parents=True, exist_ok=True)
+    component_path.write_text(_faq_section(), encoding="utf-8")
+    _ensure_import(app_path, "FAQSection")
+    _insert_component_before_section(app_path, "contact-section", "FAQSection")
+    _append_css_once(css_path, "faq-section", _faq_css())
+    return ["src/App.jsx", "src/App.css", "src/components/FAQSection.jsx"]
+
+
+def _apply_cta_button_edit(workspace_path: Path, label: Any) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    source = app_path.read_text(encoding="utf-8")
+    if "data-webpilot-added-cta" in source:
+        return ["src/App.jsx"]
+    safe_label = str(label) if isinstance(label, str) and label.strip() else "Get started"
+    button = f'\n        <button type="button" data-webpilot-added-cta>{safe_label}</button>'
+    marker = "</h1>"
+    if marker not in source:
+        raise ValueError("Could not find a hero heading to place the CTA button after.")
+    app_path.write_text(source.replace(marker, marker + button, 1), encoding="utf-8")
+    return ["src/App.jsx"]
+
+
+def _ensure_import(app_path: Path, component_name: str) -> None:
+    source = app_path.read_text(encoding="utf-8")
+    import_line = f"import {{ {component_name} }} from './components/{component_name}.jsx';"
+    if import_line in source:
+        return
+    if source.startswith("import "):
+        lines = source.splitlines()
+        insert_at = 0
+        for index, line in enumerate(lines):
+            if line.startswith("import "):
+                insert_at = index + 1
+        lines.insert(insert_at, import_line)
+        app_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    app_path.write_text(import_line + "\n\n" + source, encoding="utf-8")
+
+
+def _insert_component_after_section(app_path: Path, section_class: str, component_name: str) -> None:
+    source = app_path.read_text(encoding="utf-8")
+    component_tag = f"<{component_name} />"
+    if component_tag in source:
+        return
+    marker_index = source.find(section_class)
+    if marker_index == -1:
+        raise ValueError(f"Could not find section marker {section_class!r} in src/App.jsx")
+    closing_index = source.find("</section>", marker_index)
+    if closing_index == -1:
+        raise ValueError(f"Could not find closing section after {section_class!r}")
+    insert_at = closing_index + len("</section>")
+    source = source[:insert_at] + f"\n\n      {component_tag}" + source[insert_at:]
+    app_path.write_text(source, encoding="utf-8")
+
+
+def _insert_component_before_section(app_path: Path, section_class: str, component_name: str) -> None:
+    source = app_path.read_text(encoding="utf-8")
+    component_tag = f"<{component_name} />"
+    if component_tag in source:
+        return
+    marker_index = source.find(section_class)
+    if marker_index == -1:
+        raise ValueError(f"Could not find section marker {section_class!r} in src/App.jsx")
+    section_start = source.rfind("<section", 0, marker_index)
+    if section_start == -1:
+        raise ValueError(f"Could not find section start before {section_class!r}")
+    source = source[:section_start] + f"{component_tag}\n\n      " + source[section_start:]
+    app_path.write_text(source, encoding="utf-8")
+
+
+def _append_css_once(css_path: Path, marker: str, css: str) -> None:
+    source = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+    if marker in source:
+        return
+    css_path.write_text(source.rstrip() + "\n\n" + css.lstrip(), encoding="utf-8")
+
+
+def _testimonials_section() -> str:
+    return """const testimonials = [
+  {
+    name: 'Maya Chen',
+    quote: 'The new planning flow helped our team ship with far fewer status meetings.',
+  },
+  {
+    name: 'Jordan Lee',
+    quote: 'We finally have one calm place to see priorities, pricing, and next steps.',
+  },
+];
+
+export function TestimonialsSection() {
+  return (
+    <section className="testimonials-section" aria-labelledby="testimonials-title">
+      <div className="section-heading">
+        <p className="eyebrow">Testimonials</p>
+        <h2 id="testimonials-title">Teams trust WebPilot-ready workflows</h2>
+      </div>
+      <div className="testimonial-grid">
+        {testimonials.map((testimonial) => (
+          <article className="testimonial-card" key={testimonial.name}>
+            <p>{testimonial.quote}</p>
+            <h3>{testimonial.name}</h3>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+"""
+
+
+def _testimonials_css() -> str:
+    return """.testimonials-section {
+  background: #f8fafc;
+  padding: 48px 24px;
+}
+
+.testimonial-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.testimonial-card {
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.testimonial-card p {
+  color: #334155;
+  line-height: 1.7;
+}
+
+@media (max-width: 760px) {
+  .testimonial-grid {
+    grid-template-columns: 1fr;
+  }
+}
+"""
+
+
+def _faq_section() -> str:
+    return """const faqs = [
+  { question: 'Can we start small?', answer: 'Yes, the app supports lightweight landing-page edits first.' },
+  { question: 'Does this require an API key?', answer: 'No, deterministic editing works in mock mode.' },
+  { question: 'Can browser feedback still run?', answer: 'Yes, the normal browser checks still execute afterward.' },
+];
+
+export function FAQSection() {
+  return (
+    <section className="faq-section" aria-labelledby="faq-title">
+      <div className="section-heading">
+        <p className="eyebrow">FAQ</p>
+        <h2 id="faq-title">Common questions</h2>
+      </div>
+      {faqs.map((faq) => (
+        <article className="faq-item" key={faq.question}>
+          <h3>{faq.question}</h3>
+          <p>{faq.answer}</p>
+        </article>
+      ))}
+    </section>
+  );
+}
+"""
+
+
+def _faq_css() -> str:
+    return """.faq-section {
+  background: #ffffff;
+  padding: 48px 24px;
+}
+
+.faq-item {
+  border-top: 1px solid #dbe3ee;
+  max-width: 760px;
+  padding: 18px 0;
+}
+"""
 
 
 def _package_json() -> str:
@@ -429,3 +699,79 @@ def _infer_title(instruction: str) -> str:
     if "task management" in instruction.lower():
         return "Manage every task without losing momentum"
     return "A focused web experience generated by WebPilot"
+
+
+def _uses_llm(provider: LLMProvider) -> bool:
+    return getattr(provider, "provider_name", "mock") != "mock"
+
+
+def _code_prompt(task: Task, plan: Plan) -> str:
+    return f"""Generate a minimal runnable Vite + React app for this WebPilot task.
+
+Return JSON only: an object mapping relative file paths to full file contents.
+Required paths:
+- package.json
+- vite.config.js
+- index.html
+- src/main.jsx
+- src/App.jsx
+- src/App.css
+
+You may add component files under src/components/.
+Do not include markdown fences or explanations.
+Use React 18, Vite, and JavaScript JSX.
+The app must satisfy the task and plan.
+
+Task:
+{json.dumps(task.to_dict(), indent=2)}
+
+Plan:
+{json.dumps(plan.to_dict(), indent=2)}
+"""
+
+
+def _parse_file_map(raw: str) -> dict[str, str]:
+    data = json.loads(_strip_json_fence(raw))
+    if not isinstance(data, dict):
+        raise ValueError("file output must be a JSON object")
+    if len(data) > 32:
+        raise ValueError("LLM output contains too many files")
+
+    required = {"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/App.css"}
+    missing = required.difference(data)
+    if missing:
+        raise ValueError(f"LLM output missing required files: {sorted(missing)}")
+
+    files: dict[str, str] = {}
+    for relative_path, content in data.items():
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ValueError("file paths must be non-empty strings")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"file content for {relative_path} must be non-empty")
+        if len(content) > 100_000:
+            raise ValueError(f"file content for {relative_path} is too large")
+        files[relative_path] = content
+    return files
+
+
+def _safe_workspace_path(workspace_path: Path, relative_path: str) -> Path:
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Unsafe LLM file path: {relative_path}")
+    target = (workspace_path / path).resolve()
+    workspace = workspace_path.resolve()
+    if workspace not in target.parents and target != workspace:
+        raise ValueError(f"Unsafe LLM file path outside workspace: {relative_path}")
+    return target
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text

@@ -1,10 +1,13 @@
-"""Deterministic planner for WebPilot step 1."""
+"""Deterministic planner for WebPilot."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
+from webpilot.llm.base import LLMProvider, LLMProviderError
+from webpilot.llm.mock_provider import MockLLMProvider
 from webpilot.task_schema import Task
 
 
@@ -33,12 +36,30 @@ class Plan:
 
 
 class Planner:
-    """Builds a structured, deterministic plan from task text."""
+    """Builds a structured plan from task text."""
+
+    def __init__(self, llm_provider: LLMProvider | None = None) -> None:
+        self.llm_provider = llm_provider or MockLLMProvider()
 
     def plan(self, task: Task) -> Plan:
+        if _uses_llm(self.llm_provider):
+            return self._plan_with_llm(task)
         if task.type == "text_generation":
             return self._plan_generation(task)
+        if task.type == "editing":
+            return self._plan_editing(task)
         return self._plan_repair(task)
+
+    def _plan_with_llm(self, task: Task) -> Plan:
+        prompt = _plan_prompt(task, retry=False)
+        try:
+            return _parse_plan_json(self.llm_provider.complete(prompt))
+        except (json.JSONDecodeError, ValueError, LLMProviderError) as first_error:
+            retry_prompt = _plan_prompt(task, retry=True, previous_error=str(first_error))
+            try:
+                return _parse_plan_json(self.llm_provider.complete(retry_prompt))
+            except (json.JSONDecodeError, ValueError, LLMProviderError) as second_error:
+                raise LLMProviderError(f"LLM planner returned invalid plan JSON after retry: {second_error}") from second_error
 
     def _plan_generation(self, task: Task) -> Plan:
         source = _task_text(task)
@@ -121,6 +142,69 @@ class Planner:
         rationale = "Repair planning identifies inspection targets only; patching is deferred to step 2."
         return Plan(task_type=task.type, items=targets, rationale=rationale)
 
+    def _plan_editing(self, task: Task) -> Plan:
+        source = _task_text(task)
+        items: list[PlanItem] = []
+
+        if _mentions(source, "testimonial", "quote", "customer"):
+            items.append(
+                PlanItem(
+                    name="TestimonialsSection",
+                    kind="edit_target",
+                    details={
+                        "pattern": "add_section",
+                        "files": [
+                            "src/App.jsx",
+                            "src/App.css",
+                            "src/components/TestimonialsSection.jsx",
+                        ],
+                        "insert_after": "pricing-section",
+                        "items": 2,
+                    },
+                )
+            )
+        if _mentions(source, "faq", "frequently asked", "questions"):
+            items.append(
+                PlanItem(
+                    name="FAQSection",
+                    kind="edit_target",
+                    details={
+                        "pattern": "add_section",
+                        "files": ["src/App.jsx", "src/App.css", "src/components/FAQSection.jsx"],
+                        "insert_before": "contact-section",
+                        "items": 3,
+                    },
+                )
+            )
+        if _mentions(source, "button", "cta", "call to action"):
+            items.append(
+                PlanItem(
+                    name="CTAButton",
+                    kind="edit_target",
+                    details={
+                        "pattern": "add_button",
+                        "files": ["src/App.jsx"],
+                        "label": "Get started",
+                    },
+                )
+            )
+
+        if not items:
+            items.append(
+                PlanItem(
+                    name="ManualEditFallback",
+                    kind="edit_target",
+                    details={
+                        "pattern": "unsupported",
+                        "files": ["src/App.jsx"],
+                        "reason": "No deterministic editing pattern matched this instruction.",
+                    },
+                )
+            )
+
+        rationale = "Editing plan derived deterministically from requested-change keywords and expected behaviors."
+        return Plan(task_type=task.type, items=items, rationale=rationale)
+
 
 def _task_text(task: Task) -> str:
     return " ".join([task.instruction, *task.expected_behaviors, *task.test_hints]).lower()
@@ -129,3 +213,70 @@ def _task_text(task: Task) -> str:
 def _mentions(source: str, *keywords: str) -> bool:
     return any(keyword in source for keyword in keywords)
 
+
+def _uses_llm(provider: LLMProvider) -> bool:
+    return getattr(provider, "provider_name", "mock") != "mock"
+
+
+def _plan_prompt(task: Task, retry: bool, previous_error: str | None = None) -> str:
+    retry_text = ""
+    if retry:
+        retry_text = f"\nThe previous response was invalid: {previous_error}\nReturn valid JSON only."
+    return f"""Create a WebPilot plan for this task.
+
+Return JSON only with exactly this schema:
+{{
+  "task_type": "text_generation, diagnostic_repair, or editing",
+  "items": [
+    {{"name": "ComponentOrTargetName", "kind": "component or inspection_target", "details": {{"purpose": "short text"}}}}
+  ],
+  "rationale": "short rationale"
+}}
+
+Task:
+{json.dumps(task.to_dict(), indent=2)}
+{retry_text}
+"""
+
+
+def _parse_plan_json(raw: str) -> Plan:
+    data = json.loads(_strip_json_fence(raw))
+    if not isinstance(data, dict):
+        raise ValueError("plan must be a JSON object")
+    task_type = data.get("task_type")
+    items_raw = data.get("items")
+    rationale = data.get("rationale")
+    if not isinstance(task_type, str) or not task_type:
+        raise ValueError("plan.task_type must be a non-empty string")
+    if not isinstance(rationale, str) or not rationale:
+        raise ValueError("plan.rationale must be a non-empty string")
+    if not isinstance(items_raw, list) or not items_raw:
+        raise ValueError("plan.items must be a non-empty list")
+
+    items: list[PlanItem] = []
+    for item in items_raw:
+        if not isinstance(item, dict):
+            raise ValueError("each plan item must be an object")
+        name = item.get("name")
+        kind = item.get("kind")
+        details = item.get("details")
+        if not isinstance(name, str) or not name:
+            raise ValueError("plan item name must be a non-empty string")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("plan item kind must be a non-empty string")
+        if not isinstance(details, dict):
+            raise ValueError("plan item details must be an object")
+        items.append(PlanItem(name=name, kind=kind, details=details))
+    return Plan(task_type=task_type, items=items, rationale=rationale)
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text

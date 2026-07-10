@@ -1,4 +1,4 @@
-"""Task schema for WebPilot step 1."""
+"""Task schema for WebPilot."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-TaskType = Literal["text_generation", "diagnostic_repair"]
+TaskType = Literal["text_generation", "diagnostic_repair", "editing"]
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class Task:
     def from_dict(cls, data: dict[str, Any]) -> "Task":
         task_id = _required_string(data, "id")
         task_type = _required_string(data, "type")
-        if task_type not in ("text_generation", "diagnostic_repair"):
+        if task_type not in ("text_generation", "diagnostic_repair", "editing"):
             raise ValueError(f"Unsupported task type: {task_type}")
 
         instruction = _required_string(data, "instruction")
@@ -39,8 +39,8 @@ class Task:
 
         if task_type == "text_generation" and repo_path is not None:
             raise ValueError("text_generation tasks must have repo_path set to null")
-        if task_type == "diagnostic_repair" and not repo_path:
-            raise ValueError("diagnostic_repair tasks require a non-null repo_path")
+        if task_type in ("diagnostic_repair", "editing") and not repo_path:
+            raise ValueError(f"{task_type} tasks require a non-null repo_path")
 
         return cls(
             id=task_id,
@@ -81,4 +81,3 @@ def _string_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{field_name} must be a list of strings")
     return value
-

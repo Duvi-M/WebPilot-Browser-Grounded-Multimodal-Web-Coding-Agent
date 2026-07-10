@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from webpilot.agent.coder import Coder
 from webpilot.agent.planner import Planner
 from webpilot.task_schema import Task
@@ -37,8 +39,9 @@ def test_coder_generates_real_vite_react_app(tmp_path: Path) -> None:
     assert "src/components/PricingSection.jsx" in result.generated_files
 
 
-def test_apply_repair_is_step_one_stub() -> None:
-    assert Coder().apply_repair({}) == "not implemented in step 1"
+def test_apply_repair_requires_workspace_path() -> None:
+    with pytest.raises(ValueError, match="workspace_path is required"):
+        Coder().apply_repair({})
 
 
 def test_apply_repair_delegates_to_repairer(tmp_path: Path) -> None:

@@ -1,0 +1,14 @@
+{
+  "id": "task_005",
+  "type": "editing",
+  "instruction": "Add a testimonials section with 2 customer quotes below the pricing section.",
+  "repo_path": "webpilot/examples/editable_landing_app",
+  "expected_behaviors": [
+    "The testimonials section is visible.",
+    "At least 2 testimonial items are present."
+  ],
+  "test_hints": [
+    "Look below the pricing section for testimonial content.",
+    "Count testimonial cards or customer quotes."
+  ]
+}

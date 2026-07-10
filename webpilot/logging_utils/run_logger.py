@@ -60,21 +60,6 @@ class RunLogger:
     def write_generated_files(self, paths: RunPaths, files: list[str]) -> None:
         self.write_json(paths.generated_files_path, {"files": files})
 
-    def write_summary(self, paths: RunPaths, task: Task) -> dict[str, Any]:
-        summary = {
-            "task_id": task.id,
-            "task_type": task.type,
-            "variant": "base",
-            "iterations": 1,
-            "status": "generated",
-            "artifact_paths": {
-                "run_dir": str(paths.run_dir),
-                "iteration_0": str(paths.iteration_dir),
-                "workspace": str(paths.workspace_dir),
-                "plan": str(paths.plan_path),
-                "generated_files": str(paths.generated_files_path),
-            },
-        }
+    def write_summary(self, paths: RunPaths, summary: dict[str, Any]) -> dict[str, Any]:
         self.write_json(paths.summary_path, summary)
         return summary
-

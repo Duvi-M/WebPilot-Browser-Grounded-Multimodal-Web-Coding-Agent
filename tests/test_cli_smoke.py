@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from webpilot.config import chromium_launch_args
+
 
 def test_cli_base_smoke_runs_browser_grounded_generation() -> None:
     _require_browser_stack()
@@ -66,8 +68,7 @@ def _require_browser_stack() -> None:
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
+            browser = playwright.chromium.launch(args=chromium_launch_args())
             browser.close()
     except Exception as exc:
         pytest.skip(f"Playwright Chromium browser is unavailable: {exc}")
-

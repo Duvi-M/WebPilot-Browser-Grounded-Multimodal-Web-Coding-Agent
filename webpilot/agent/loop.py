@@ -12,6 +12,8 @@ from webpilot.agent.reflector import Reflector
 from webpilot.browser.executor import BrowserExecutor, ExecutionEvidence
 from webpilot.evaluation.metrics import executability, interaction_correctness
 from webpilot.logging_utils.run_logger import RunLogger, RunPaths
+from webpilot.llm.base import LLMProvider
+from webpilot.llm.mock_provider import MockLLMProvider
 from webpilot.task_schema import Task
 
 
@@ -29,14 +31,15 @@ class AgentRunResult:
 class AgentLoop:
     """Coordinates plan, code, browser execution, reflection, and optional repair."""
 
-    def __init__(self, variant: Variant = "base", max_iterations: int = 1) -> None:
+    def __init__(self, variant: Variant = "base", max_iterations: int = 1, llm_provider: LLMProvider | None = None) -> None:
         if max_iterations < 1:
             raise ValueError("--max-iterations must be at least 1")
         self.variant = variant
         self.max_iterations = max_iterations
+        self.llm_provider = llm_provider or MockLLMProvider()
         self.logger = RunLogger()
-        self.planner = Planner()
-        self.coder = Coder()
+        self.planner = Planner(self.llm_provider)
+        self.coder = Coder(self.llm_provider)
         self.executor = BrowserExecutor()
         self.reflector = Reflector()
 
@@ -141,4 +144,3 @@ def _summary(
         "artifact_paths": artifact_paths,
         "final_workspace_path": str(workspace_path),
     }
-
