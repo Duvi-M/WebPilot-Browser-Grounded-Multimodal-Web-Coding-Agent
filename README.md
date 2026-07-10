@@ -39,6 +39,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 ## What Step 2 Supports
 
 - Text-guided generation of a minimal Vite + React app.
+- Mock dashboard generation with sidebar navigation, summary stats, and a data table.
 - Instruction-guided editing of an existing Vite + React app for a small deterministic pattern set.
 - Diagnostic repair using a local broken fixture.
 - Browser execution with Playwright and Chromium.
@@ -48,6 +49,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - Console log and page error capture.
 - Basic Playwright interaction checks.
 - Deterministic browser-feedback repairs for known failure types.
+- Heuristic `patch_quality` scoring for repair/editing tasks.
 - Optional OpenAI-backed planning and code generation for `text_generation` tasks.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
@@ -56,11 +58,12 @@ Out of scope for this MVP: general-purpose editing, vision-guided generation, vi
 
 ## Known Limitations
 
-- The repairer handles only a fixed set of hardcoded failure patterns: missing form fields, missing submit feedback, missing submit handler, and mobile horizontal overflow. Other failures are reported as `no_automated_repair_available`.
-- Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, and add a simple CTA button. It is not a general code editing engine yet.
+- The repairer handles only a fixed set of hardcoded failure patterns: missing form fields, missing submit feedback, missing submit handler, mobile horizontal overflow, and a simple nav menu state-toggle repair. Other failures are reported as `no_automated_repair_available`.
+- Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, add newsletter signup, add a simple CTA button, and update simple CTA text/color. It is not a general code editing engine yet.
+- Mock dashboard generation covers static sidebar/stats/table layouts, but not sorting, filtering, pagination, charts, or live data.
 - With `--llm-provider openai`, Planner and Coder become LLM-driven for generation tasks, but the Repairer remains deterministic for now.
 - Chromium is launched with sandbox workaround args by default: `--no-sandbox` and `--disable-setuid-sandbox`. Set `WEBPILOT_DISABLE_CHROMIUM_SANDBOX_ARGS=1` to disable those args on systems where the browser sandbox works normally.
-- `patch_quality` and `visual_quality` are placeholder metrics and currently return `None`.
+- `patch_quality` is a heuristic proxy, not an LLM-judged or human-judged score. It combines localization, diff size, and targetedness. `visual_quality` is still a placeholder and currently returns `None`.
 - Generated repairs are deterministic string edits, not robust AST-aware code transformations.
 
 ## Requirements
@@ -110,6 +113,12 @@ python -m webpilot.cli run --task webpilot/tasks/sample_diagnostic_repair.json -
 
 The diagnostic task copies `webpilot/examples/buggy_repair_app` into the run workspace, executes it, detects missing form/feedback/overflow issues, and applies deterministic repairs when possible.
 
+The nav repair sample verifies the deterministic state-toggle repair:
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_nav_repair.json --variant browser-feedback --max-iterations 3
+```
+
 ## Run Editing
 
 ```bash
@@ -117,6 +126,20 @@ python -m webpilot.cli run --task webpilot/tasks/sample_editing_task.json --vari
 ```
 
 The editing task copies `webpilot/examples/editable_landing_app` into the run workspace and applies a deterministic localized edit. The sample adds `TestimonialsSection.jsx`, imports it into `src/App.jsx`, renders it below pricing, and appends matching CSS.
+
+Newsletter editing uses the same fixture and adds a signup form before contact:
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_editing_newsletter.json --variant base --max-iterations 1
+```
+
+## Run Dashboard Generation
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_dashboard_generation.json --variant base --max-iterations 1
+```
+
+The mock planner/coder recognize dashboard, sidebar navigation, summary stats, and data table instructions and generate `Sidebar.jsx`, `StatsBar.jsx`, and `DataTable.jsx`.
 
 ## Run Evaluation
 
@@ -151,10 +174,13 @@ iteration_<n>/
   dev_server_stderr.log
   test_results.json
   reflection.json
+  edit_plan.json
   repair_plan.json
 ```
 
-`repair_plan.json` is present only when a repair is attempted. The final `summary.json` includes executability, interaction correctness, failures found, repair attempts, and the final workspace path.
+`edit_plan.json` is present only for editing tasks and includes `files_modified` plus unified diffs for the deterministic edit. `repair_plan.json` is present only when a repair is attempted. The final `summary.json` includes executability, interaction correctness, patch quality, failures found, edit/repair attempts, and the final workspace path.
+
+`patch_quality` is computed only for `diagnostic_repair` and `editing` tasks. Formula: `0.4 * localization + 0.3 * size + 0.3 * targetedness`. Localization rewards touching fewer workspace files, size rewards smaller unified diffs, and targetedness rewards applied repairs or deterministic edits. `text_generation` tasks report `null` because there is no patch against an existing repository.
 
 ## Tests
 

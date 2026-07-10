@@ -1,0 +1,15 @@
+{
+  "id": "task_006",
+  "type": "editing",
+  "instruction": "Add a newsletter signup form before the contact section with an email input and a subscribe button.",
+  "repo_path": "webpilot/examples/editable_landing_app",
+  "expected_behaviors": [
+    "The newsletter signup section is visible before the contact section.",
+    "The newsletter form includes an email input.",
+    "The newsletter form includes a subscribe button."
+  ],
+  "test_hints": [
+    "Look for newsletter text before the contact section.",
+    "Check for an email input and subscribe button."
+  ]
+}

@@ -89,6 +89,39 @@ class Planner:
                     details={"fields": ["name", "email", "message"], "purpose": "Collect contact details."},
                 )
             )
+        if _mentions(source, "dashboard", "sidebar", "data table", "stats"):
+            if _mentions(source, "dashboard", "sidebar", "navigation"):
+                items.append(
+                    PlanItem(
+                        name="Sidebar",
+                        kind="component",
+                        details={"purpose": "Provide dashboard navigation links."},
+                    )
+                )
+            if _mentions(source, "dashboard", "stats", "summary"):
+                items.append(
+                    PlanItem(
+                        name="StatsBar",
+                        kind="component",
+                        details={"purpose": "Show summary dashboard metrics at the top."},
+                    )
+                )
+            if _mentions(source, "dashboard", "data table", "table", "rows"):
+                items.append(
+                    PlanItem(
+                        name="DataTable",
+                        kind="component",
+                        details={"rows": 3, "purpose": "Render a data table with real placeholder records."},
+                    )
+                )
+            if not any(item.name == "DashboardShell" for item in items):
+                items.append(
+                    PlanItem(
+                        name="DashboardShell",
+                        kind="component",
+                        details={"purpose": "Lay out dashboard navigation and main content."},
+                    )
+                )
 
         if not items:
             items.append(
@@ -176,7 +209,33 @@ class Planner:
                     },
                 )
             )
-        if _mentions(source, "button", "cta", "call to action"):
+        if _mentions(source, "newsletter", "signup", "sign up", "subscribe"):
+            items.append(
+                PlanItem(
+                    name="NewsletterSignup",
+                    kind="edit_target",
+                    details={
+                        "pattern": "add_newsletter_form",
+                        "files": ["src/App.jsx", "src/App.css", "src/components/NewsletterSignup.jsx"],
+                        "insert_before": "contact-section",
+                        "fields": ["email"],
+                    },
+                )
+            )
+        if _mentions(source, "change", "update") and _mentions(source, "cta", "button") and _mentions(source, "text", "label", "color"):
+            items.append(
+                PlanItem(
+                    name="CTAStyleUpdate",
+                    kind="edit_target",
+                    details={
+                        "pattern": "change_cta_text_color",
+                        "files": ["src/App.jsx", "src/App.css"],
+                        "label": "Start free today",
+                        "color": "#1f5eff",
+                    },
+                )
+            )
+        if _mentions(source, "button", "cta", "call to action") and not _mentions(source, "newsletter", "signup", "sign up", "subscribe"):
             items.append(
                 PlanItem(
                     name="CTAButton",

@@ -28,6 +28,8 @@ class Repairer:
                 self._apply_with_record(plan, failure_type, workspace_path, self._repair_submit_feedback)
             elif failure_type == "horizontal_overflow_mobile":
                 self._apply_with_record(plan, failure_type, workspace_path, self._repair_overflow)
+            elif failure_type == "nav_menu_no_state_toggle":
+                self._apply_with_record(plan, failure_type, workspace_path, self._repair_nav_menu)
             else:
                 plan["skipped_repair_types"].append(failure_type)
                 plan["details"].append(f"No automated repair available for {failure_type}.")
@@ -124,6 +126,45 @@ svg {
             after = after.rstrip() + rules + "\n"
         return _write_if_changed(target, before, after, "Added mobile horizontal overflow guards.")
 
+    def _repair_nav_menu(self, workspace_path: Path) -> tuple[bool, list[str], list[str], dict[str, str]]:
+        target = _find_nav_file(workspace_path)
+        if target is None:
+            return False, [], ["No React file containing a nav menu toggle was found."], {}
+
+        before = target.read_text(encoding="utf-8")
+        after = before
+        if "useState" not in after:
+            if "import React from 'react';" in after:
+                after = after.replace("import React from 'react';", "import React, { useState } from 'react';", 1)
+            elif "from 'react'" in after and "useState" not in after:
+                after = after.replace("import {", "import { useState,", 1)
+            else:
+                after = "import { useState } from 'react';\n" + after
+
+        if "const [menuOpen, setMenuOpen]" not in after:
+            after = _insert_after_function_open(
+                after,
+                "  const [menuOpen, setMenuOpen] = useState(false);\n",
+            )
+
+        if "function handleMenuClick()" in after and "setMenuOpen((open) => !open)" not in after:
+            after = _replace_function_body(
+                after,
+                "handleMenuClick",
+                "  function handleMenuClick() {\n    setMenuOpen((open) => !open);\n  }",
+            )
+        elif "function handleMenuClick()" not in after:
+            after = _insert_after_function_open(
+                after,
+                "\n  function handleMenuClick() {\n    setMenuOpen((open) => !open);\n  }\n",
+            )
+
+        after = after.replace('className="nav-menu"', 'className={menuOpen ? "nav-menu open" : "nav-menu"}', 1)
+        after = after.replace('aria-label="Primary navigation"', 'aria-label="Primary navigation" role="menu"', 1)
+        after = after.replace('aria-label="Open menu"', 'aria-label="Open menu" aria-expanded={menuOpen}', 1)
+
+        return _write_if_changed(target, before, after, "Wired nav menu toggle to React state and visible menu class.")
+
 
 def _find_form_file(workspace_path: Path) -> Path | None:
     preferred = workspace_path / "src" / "components" / "ContactForm.jsx"
@@ -131,6 +172,18 @@ def _find_form_file(workspace_path: Path) -> Path | None:
         return preferred
     for path in sorted((workspace_path / "src").rglob("*.jsx")):
         if "<form" in path.read_text(encoding="utf-8"):
+            return path
+    return None
+
+
+def _find_nav_file(workspace_path: Path) -> Path | None:
+    for path in sorted((workspace_path / "src").rglob("*.jsx")):
+        source = path.read_text(encoding="utf-8")
+        if "nav-menu" in source and "handleMenuClick" in source:
+            return path
+    for path in sorted((workspace_path / "src").rglob("*.jsx")):
+        source = path.read_text(encoding="utf-8")
+        if "<nav" in source and "Menu" in source:
             return path
     return None
 
@@ -165,6 +218,31 @@ def _insert_inside_first_form(source: str, insertion: str) -> str:
         absolute_button_index = form_start + button_index
         return source[:absolute_button_index] + insertion + "\n" + source[absolute_button_index:]
     return source[:form_end] + insertion + "\n" + source[form_end:]
+
+
+def _replace_function_body(source: str, function_name: str, replacement: str) -> str:
+    marker = f"function {function_name}() {{"
+    marker_start = source.find(marker)
+    if marker_start == -1:
+        return source
+    start = marker_start
+    line_start = source.rfind("\n", 0, marker_start) + 1
+    leading = source[line_start:marker_start]
+    if leading.strip() == "":
+        start = line_start
+        replacement = replacement + "\n"
+    index = marker_start + len(marker)
+    depth = 1
+    while index < len(source):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[:start] + replacement + source[index + 1 :]
+        index += 1
+    return source
 
 
 def _write_if_changed(target: Path, before: str, after: str, detail: str) -> tuple[bool, list[str], list[str], dict[str, str]]:

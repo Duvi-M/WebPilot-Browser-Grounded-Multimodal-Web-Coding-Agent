@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import difflib
 import json
 from pathlib import Path
 import shutil
@@ -20,6 +21,7 @@ class CoderResult:
     workspace_path: Path
     generated_files: list[str]
     message: str
+    change_records: list[dict[str, Any]] | None = None
 
 
 class Coder:
@@ -41,6 +43,7 @@ class Coder:
                 workspace_path=workspace_path,
                 generated_files=generated_files,
                 message="Copied repository and applied deterministic edit.",
+                change_records=[edit_result],
             )
         return self._copy_repair_workspace(task, workspace_path)
 
@@ -55,22 +58,47 @@ class Coder:
 
         files_touched: list[str] = []
         messages: list[str] = []
+        edit_names: list[str] = []
+        before = _snapshot_workspace_files(workspace_path)
         for item in plan.items:
             if item.name == "TestimonialsSection":
                 files_touched.extend(_apply_testimonials_edit(workspace_path))
+                edit_names.append(item.name)
                 messages.append("Added testimonials section after pricing.")
             elif item.name == "FAQSection":
                 files_touched.extend(_apply_faq_edit(workspace_path))
+                edit_names.append(item.name)
                 messages.append("Added FAQ section before contact.")
             elif item.name == "CTAButton":
                 files_touched.extend(_apply_cta_button_edit(workspace_path, item.details.get("label", "Get started")))
+                edit_names.append(item.name)
                 messages.append("Added CTA button to the hero section.")
+            elif item.name == "NewsletterSignup":
+                files_touched.extend(_apply_newsletter_edit(workspace_path))
+                edit_names.append(item.name)
+                messages.append("Added newsletter signup form before contact.")
+            elif item.name == "CTAStyleUpdate":
+                files_touched.extend(
+                    _apply_cta_style_update(
+                        workspace_path,
+                        item.details.get("label", "Start free today"),
+                        item.details.get("color", "#1f5eff"),
+                    )
+                )
+                edit_names.append(item.name)
+                messages.append("Updated CTA button text and color.")
             else:
                 messages.append(f"No deterministic edit implemented for {item.name}.")
 
+        touched = sorted(set(files_touched))
+        diffs = _diff_touched_files(workspace_path, before, touched)
+        files_modified = [str((workspace_path / path).resolve()) for path in touched if path in diffs]
         return {
             "edits_applied": bool(files_touched),
-            "files_touched": sorted(set(files_touched)),
+            "edit_types_applied": edit_names,
+            "files_touched": touched,
+            "files_modified": files_modified,
+            "diffs": {str((workspace_path / path).resolve()): diff for path, diff in diffs.items()},
             "messages": messages,
         }
 
@@ -99,6 +127,12 @@ class Coder:
             files["src/components/ContactForm.jsx"] = _contact_form()
         if "AppShell" in components:
             files["src/components/AppShell.jsx"] = _app_shell(task)
+        if "Sidebar" in components:
+            files["src/components/Sidebar.jsx"] = _sidebar()
+        if "StatsBar" in components:
+            files["src/components/StatsBar.jsx"] = _stats_bar()
+        if "DataTable" in components:
+            files["src/components/DataTable.jsx"] = _data_table()
 
         generated: list[str] = []
         for relative_path, content in files.items():
@@ -178,6 +212,44 @@ def _apply_testimonials_edit(workspace_path: Path) -> list[str]:
     ]
 
 
+def _snapshot_workspace_files(workspace_path: Path) -> dict[str, str]:
+    if not workspace_path.exists():
+        return {}
+    ignored_parts = {"node_modules", "dist", "build", ".git"}
+    snapshots: dict[str, str] = {}
+    for path in sorted(workspace_path.rglob("*")):
+        if not path.is_file():
+            continue
+        relative_path = str(path.relative_to(workspace_path))
+        if ignored_parts.intersection(Path(relative_path).parts):
+            continue
+        snapshots[relative_path] = path.read_text(encoding="utf-8")
+    return snapshots
+
+
+def _diff_touched_files(workspace_path: Path, before: dict[str, str], files_touched: list[str]) -> dict[str, str]:
+    diffs: dict[str, str] = {}
+    for relative_path in files_touched:
+        target = workspace_path / relative_path
+        if not target.exists():
+            continue
+        before_text = before.get(relative_path, "")
+        after_text = target.read_text(encoding="utf-8")
+        if before_text == after_text:
+            continue
+        from_file = f"a/{relative_path}" if relative_path in before else "/dev/null"
+        diff = "".join(
+            difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=from_file,
+                tofile=f"b/{relative_path}",
+            )
+        )
+        diffs[relative_path] = diff
+    return diffs
+
+
 def _apply_faq_edit(workspace_path: Path) -> list[str]:
     app_path = workspace_path / "src" / "App.jsx"
     css_path = workspace_path / "src" / "App.css"
@@ -203,6 +275,45 @@ def _apply_cta_button_edit(workspace_path: Path, label: Any) -> list[str]:
         raise ValueError("Could not find a hero heading to place the CTA button after.")
     app_path.write_text(source.replace(marker, marker + button, 1), encoding="utf-8")
     return ["src/App.jsx"]
+
+
+def _apply_newsletter_edit(workspace_path: Path) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    css_path = workspace_path / "src" / "App.css"
+    component_path = workspace_path / "src" / "components" / "NewsletterSignup.jsx"
+
+    component_path.parent.mkdir(parents=True, exist_ok=True)
+    component_path.write_text(_newsletter_signup(), encoding="utf-8")
+    _ensure_import(app_path, "NewsletterSignup")
+    _insert_component_before_section(app_path, "contact-section", "NewsletterSignup")
+    _append_css_once(css_path, "newsletter-section", _newsletter_css())
+    return ["src/App.jsx", "src/App.css", "src/components/NewsletterSignup.jsx"]
+
+
+def _apply_cta_style_update(workspace_path: Path, label: Any, color: Any) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    css_path = workspace_path / "src" / "App.css"
+    safe_label = str(label) if isinstance(label, str) and label.strip() else "Start free today"
+    safe_color = str(color) if isinstance(color, str) and color.startswith("#") else "#1f5eff"
+
+    app_source = app_path.read_text(encoding="utf-8")
+    app_after = app_source
+    for old_label in ["Talk to us", "Start planning today", "Get started"]:
+        if old_label in app_after:
+            app_after = app_after.replace(old_label, safe_label, 1)
+            break
+    app_after = app_after.replace('className="cta-button"', 'className="cta-button cta-button-updated"', 1)
+    app_path.write_text(app_after, encoding="utf-8")
+
+    _append_css_once(
+        css_path,
+        "cta-button-updated",
+        f""".cta-button-updated {{
+  background: {safe_color};
+}}
+""",
+    )
+    return ["src/App.jsx", "src/App.css"]
 
 
 def _ensure_import(app_path: Path, component_name: str) -> None:
@@ -365,6 +476,158 @@ def _faq_css() -> str:
 """
 
 
+def _newsletter_signup() -> str:
+    return """import { useState } from 'react';
+
+export function NewsletterSignup() {
+  const [subscribed, setSubscribed] = useState(false);
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    setSubscribed(true);
+  }
+
+  return (
+    <section className="newsletter-section" aria-labelledby="newsletter-title">
+      <div className="section-heading">
+        <p className="eyebrow">Newsletter</p>
+        <h2 id="newsletter-title">Get product updates in your inbox</h2>
+      </div>
+      <form className="newsletter-form" onSubmit={handleSubmit}>
+        <label>
+          Name
+          <input name="name" type="text" placeholder="Alex Morgan" autoComplete="name" />
+        </label>
+        <label>
+          Email
+          <input name="email" type="email" placeholder="you@example.com" autoComplete="email" />
+        </label>
+        <label>
+          Message
+          <textarea name="message" placeholder="Topics you want updates about" rows="3" />
+        </label>
+        <button type="submit">Subscribe</button>
+        {subscribed && <p role="status" className="form-status">Subscription confirmed</p>}
+      </form>
+    </section>
+  );
+}
+"""
+
+
+def _newsletter_css() -> str:
+    return """.newsletter-section {
+  background: #eef6ff;
+  padding: 48px 24px;
+}
+
+.newsletter-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 420px) auto;
+}
+
+.newsletter-form label {
+  display: grid;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.newsletter-form input,
+.newsletter-form textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+@media (max-width: 760px) {
+  .newsletter-form {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+}
+"""
+
+
+def _sidebar() -> str:
+    return """const links = ['Overview', 'Reports', 'Customers', 'Settings'];
+
+export function Sidebar() {
+  return (
+    <aside className="dashboard-sidebar" aria-label="Sidebar navigation">
+      <h2>Workspace</h2>
+      <nav>
+        {links.map((link) => (
+          <a href={`#${link.toLowerCase()}`} key={link}>{link}</a>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+"""
+
+
+def _stats_bar() -> str:
+    return """const stats = [
+  { label: 'Revenue', value: '$84.2k' },
+  { label: 'Users', value: '12,480' },
+  { label: 'Conversion', value: '7.4%' },
+];
+
+export function StatsBar() {
+  return (
+    <section className="stats-bar" aria-label="Summary stats">
+      {stats.map((stat) => (
+        <article className="stat-card" key={stat.label}>
+          <p>{stat.label}</p>
+          <strong>{stat.value}</strong>
+        </article>
+      ))}
+      <button type="button" className="refresh-button">Refresh stats</button>
+    </section>
+  );
+}
+"""
+
+
+def _data_table() -> str:
+    return """const rows = [
+  { account: 'Northstar Labs', owner: 'Maya Chen', status: 'Active', value: '$18,200' },
+  { account: 'Brightline Studio', owner: 'Jordan Lee', status: 'Trial', value: '$7,450' },
+  { account: 'Atlas Ops', owner: 'Sam Rivera', status: 'Active', value: '$24,900' },
+];
+
+export function DataTable() {
+  return (
+    <section className="data-table-section" aria-labelledby="table-title">
+      <h2 id="table-title">Customer pipeline</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.account}>
+              <td>{row.account}</td>
+              <td>{row.owner}</td>
+              <td>{row.status}</td>
+              <td>{row.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+"""
+
+
 def _package_json() -> str:
     return """{
   "engines": {
@@ -427,6 +690,27 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 
 def _app_jsx(components: set[str]) -> str:
+    if {"Sidebar", "StatsBar", "DataTable"}.intersection(components):
+        ordered = [name for name in ["Sidebar", "StatsBar", "DataTable"] if name in components]
+        imports = "\n".join(f"import {{ {name} }} from './components/{name}.jsx';" for name in ordered)
+        main_renders = "\n          ".join(f"<{name} />" for name in ["StatsBar", "DataTable"] if name in components)
+        sidebar = "      <Sidebar />\n" if "Sidebar" in components else ""
+        return f"""{imports}
+
+export default function App() {{
+  return (
+    <main className="app dashboard-layout">
+{sidebar}      <section className="dashboard-main" aria-labelledby="dashboard-title">
+        <div className="dashboard-heading">
+          <p className="eyebrow">Dashboard</p>
+          <h1 id="dashboard-title">Analytics overview</h1>
+        </div>
+        {main_renders}
+      </section>
+    </main>
+  );
+}}
+"""
     ordered = [name for name in ["HeroSection", "PricingSection", "ContactForm", "AppShell"] if name in components]
     imports = "\n".join(f"import {{ {name} }} from './components/{name}.jsx';" for name in ordered)
     renders = "\n        ".join(f"<{name} />" for name in ordered)
@@ -561,6 +845,87 @@ textarea {
   min-height: 100vh;
 }
 
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+}
+
+.dashboard-sidebar {
+  background: #172033;
+  color: #ffffff;
+  min-height: 100vh;
+  padding: 28px 20px;
+}
+
+.dashboard-sidebar h2 {
+  font-size: 1rem;
+}
+
+.dashboard-sidebar nav {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard-sidebar a {
+  color: #dbeafe;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dashboard-main {
+  padding: 36px;
+}
+
+.dashboard-heading {
+  margin-bottom: 24px;
+}
+
+.stats-bar {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 28px;
+}
+
+.stat-card,
+.data-table-section {
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.stat-card p {
+  color: #526072;
+  margin-bottom: 8px;
+}
+
+.stat-card strong {
+  font-size: 1.8rem;
+}
+
+.data-table-section {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+th {
+  color: #526072;
+}
+
 .hero-section,
 .pricing-section,
 .contact-section {
@@ -689,6 +1054,18 @@ button {
   }
 
   .pricing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-sidebar {
+    min-height: auto;
+  }
+
+  .stats-bar {
     grid-template-columns: 1fr;
   }
 }

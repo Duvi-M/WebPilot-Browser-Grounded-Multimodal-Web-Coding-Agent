@@ -64,6 +64,11 @@ def test_coder_apply_edit_writes_localized_testimonials_files(tmp_path: Path) ->
     assert component_source.count("quote:") == 2
     assert ".testimonials-section" in css_source
     assert "src/components/TestimonialsSection.jsx" in result.generated_files
+    assert result.change_records is not None
+    edit_record = result.change_records[0]
+    assert "diffs" in edit_record
+    assert any(path.endswith("src/App.jsx") for path in edit_record["diffs"])
+    assert any(path.endswith("src/components/TestimonialsSection.jsx") for path in edit_record["diffs"])
 
 
 def test_apply_edit_requires_workspace_path() -> None:

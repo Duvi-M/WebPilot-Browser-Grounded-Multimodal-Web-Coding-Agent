@@ -49,6 +49,7 @@ def run_evaluation(tasks_dir: Path, variant: str, max_iterations: int) -> Path:
                 "variant": summary["variant"],
                 "executability": summary["executability_status"],
                 "interaction_correctness": summary["interaction_correctness_score"],
+                "patch_quality": summary.get("patch_quality"),
                 "iterations": summary["iterations"],
                 "final_status": summary["final_status"],
                 "summary_path": str(result.summary_path),
@@ -62,17 +63,18 @@ def run_evaluation(tasks_dir: Path, variant: str, max_iterations: int) -> Path:
 
 def _markdown(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| task_id | type | variant | executability | interaction_correctness | iterations | final_status |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| task_id | type | variant | executability | interaction_correctness | patch_quality | iterations | final_status |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
+        patch_score = row["patch_quality"]
+        patch_text = "None" if patch_score is None else f"{patch_score:.4f}"
         lines.append(
             f"| {row['task_id']} | {row['type']} | {row['variant']} | {row['executability']} | "
-            f"{row['interaction_correctness']:.2f} | {row['iterations']} | {row['final_status']} |"
+            f"{row['interaction_correctness']:.2f} | {patch_text} | {row['iterations']} | {row['final_status']} |"
         )
     return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":
     main()
-

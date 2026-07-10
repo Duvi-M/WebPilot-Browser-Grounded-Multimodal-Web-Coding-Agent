@@ -29,6 +29,8 @@ class Reflector:
             failure_types.extend(["submit_button_no_handler", "missing_submit_feedback"])
         if "mobile_has_no_horizontal_overflow" in failed_names:
             failure_types.append("horizontal_overflow_mobile")
+        if "nav_menu_opens" in failed_names:
+            failure_types.append("nav_menu_no_state_toggle")
 
         if failed and not failure_types:
             failure_types.append("no_automated_repair_available")
@@ -54,6 +56,7 @@ def _recommendation_for(failure_type: str) -> str:
         "submit_button_no_handler": "Attach a submit handler that prevents default submission and sets feedback state.",
         "missing_submit_feedback": "Render visible confirmation text after form submission.",
         "horizontal_overflow_mobile": "Add CSS rules that prevent horizontal overflow on narrow viewports.",
+        "nav_menu_no_state_toggle": "Wire the menu toggle to state and render the nav menu as visible when open.",
         "missing_button": "Add a visible button or CTA.",
         "page_load_failure": "Inspect npm, Vite, and page load errors.",
         "console_runtime_error": "Inspect console/runtime errors before applying a targeted patch.",
@@ -67,4 +70,3 @@ def _read_json(path: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-

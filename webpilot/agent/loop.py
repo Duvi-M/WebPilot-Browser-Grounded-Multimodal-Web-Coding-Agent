@@ -10,7 +10,7 @@ from webpilot.agent.coder import Coder
 from webpilot.agent.planner import Planner
 from webpilot.agent.reflector import Reflector
 from webpilot.browser.executor import BrowserExecutor, ExecutionEvidence
-from webpilot.evaluation.metrics import executability, interaction_correctness
+from webpilot.evaluation.metrics import executability, interaction_correctness, patch_quality
 from webpilot.logging_utils.run_logger import RunLogger, RunPaths
 from webpilot.llm.base import LLMProvider
 from webpilot.llm.mock_provider import MockLLMProvider
@@ -49,6 +49,9 @@ class AgentLoop:
         self.logger.write_plan(paths, plan.to_dict())
         code_result = self.coder.code(task, plan, paths.workspace_dir)
         self.logger.write_generated_files(paths, code_result.generated_files)
+        edit_records = code_result.change_records or []
+        if edit_records:
+            self.logger.write_json(paths.iteration_dir / "edit_plan.json", edit_records[0])
 
         repairs_attempted: list[dict[str, Any]] = []
         artifact_paths: dict[str, Any] = {
@@ -58,6 +61,8 @@ class AgentLoop:
             "generated_files": str(paths.generated_files_path),
             "iterations": {},
         }
+        if edit_records:
+            artifact_paths["edit_plan"] = str(paths.iteration_dir / "edit_plan.json")
         final_reflection: dict[str, Any] = {"passed": False}
         final_evidence: ExecutionEvidence | None = None
         final_tests: list[dict[str, Any]] = []
@@ -97,6 +102,8 @@ class AgentLoop:
             repairs_attempted=repairs_attempted,
             artifact_paths=artifact_paths,
             workspace_path=paths.workspace_dir,
+            generated_files=code_result.generated_files,
+            edit_records=edit_records,
         )
         self.logger.write_json(paths.summary_path, summary)
         return AgentRunResult(paths.run_dir, paths.workspace_dir, paths.summary_path, summary)
@@ -116,6 +123,8 @@ def _summary(
     repairs_attempted: list[dict[str, Any]],
     artifact_paths: dict[str, Any],
     workspace_path: Path,
+    generated_files: list[str],
+    edit_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     executable = executability(evidence)
     interaction_score = interaction_correctness(test_results)
@@ -139,7 +148,9 @@ def _summary(
         "executability_status": "passed" if executable else "failed",
         "interaction_correctness_status": "passed" if interaction_score == 1.0 else "failed",
         "interaction_correctness_score": interaction_score,
+        "patch_quality": patch_quality(task.type, workspace_path, generated_files, repairs_attempted + edit_records),
         "failures_found": reflection.get("failed_checks", []),
+        "edits_attempted": edit_records,
         "repairs_attempted": repairs_attempted,
         "artifact_paths": artifact_paths,
         "final_workspace_path": str(workspace_path),
