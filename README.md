@@ -12,27 +12,9 @@ implement -> execute -> inspect -> repair
 
 ## Project Flow
 
-```mermaid
-flowchart LR
-    task["Task input<br/>generation, editing,<br/>or diagnostic repair"] --> planner["Planner<br/>structured implementation plan"]
-    planner --> coder["Coder<br/>generate app, copy/edit repo,<br/>or copy repair workspace"]
-    coder --> workspace["Generated workspace<br/>package.json, React source, CSS"]
-
-    workspace --> executor["Browser Executor<br/>npm install + Vite dev server<br/>Playwright Chromium"]
-    executor --> evidence["Browser evidence<br/>screenshots, DOM snapshot,<br/>console logs, page errors"]
-    executor --> tester["Interaction Tester<br/>load, buttons, forms,<br/>submit feedback, mobile overflow"]
-
-    evidence --> reflector["Reflector<br/>classify failures"]
-    tester --> reflector
-
-    reflector --> decision{"All checks pass?"}
-    decision -- "yes" --> summary["summary.json<br/>executability + interaction score"]
-    decision -- "no, base variant" --> summary
-    decision -- "no, browser-feedback<br/>and iterations remain" --> repairer["Repairer<br/>deterministic localized patch"]
-    repairer --> workspace
-
-    summary --> evaluation["Evaluation runner<br/>JSON + Markdown tables"]
-```
+<p align="center">
+  <img src="docs/visualizations/webpilot-project-flow.svg" alt="WebPilot project flow: plan and build, execute in browser, inspect evidence, reflect and report" width="100%">
+</p>
 
 Expected outcome: a local research prototype that can create or copy a front-end app, run it in a real browser, collect evidence, test basic interactions, repair known failures, and save auditable run artifacts.
 
