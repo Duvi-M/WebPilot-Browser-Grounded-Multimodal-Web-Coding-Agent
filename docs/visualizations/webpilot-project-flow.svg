@@ -139,16 +139,17 @@
     <g filter="url(#shadow)">
       <rect x="24" y="234" width="178" height="92" rx="18" class="card"/>
       <circle cx="57" cy="267" r="18" fill="url(#green)"/>
-      <text x="85" y="265" class="card-title">Artifacts</text>
-      <text x="85" y="290" class="card-text">summary.json and reports</text>
+      <text x="85" y="261" class="card-title">Artifacts</text>
+      <text x="85" y="286" class="card-text">summary.json</text>
+      <text x="85" y="306" class="card-text">Evaluation reports</text>
     </g>
   </g>
 
   <path class="arrow" d="M308 351 H395"/>
   <path class="arrow" d="M606 351 H693"/>
   <path class="arrow" d="M904 351 H991"/>
-  <path class="arrow-soft" d="M1090 432 C1090 622 476 642 476 532"/>
-  <path class="arrow-soft" d="M1075 430 C1010 600 794 604 794 532"/>
+  <path class="arrow-soft" d="M1086 548 C1040 626 476 636 476 532"/>
+  <path class="arrow-soft" d="M1068 548 C1006 598 794 600 794 532"/>
 
   <g transform="translate(80 574)">
     <rect width="1120" height="78" rx="18" class="pill"/>
