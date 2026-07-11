@@ -1,10 +1,10 @@
-# WebPilot: Browser-Grounded Multimodal Web Coding Agent
+# WebPilot: Browser-Grounded Web Coding Agent
 
-[Прогресс по требованиям проекта](PROJECT_PROGRESS_RU.md)
+[Project Progress and Requirements Coverage](PROJECT_PROGRESS.md)
 
-WebPilot is a research/prototype project for a web coding agent that closes the loop between code generation and real browser evidence.
+WebPilot is a research/prototype project for a web coding agent that closes the loop between code generation and real browser evidence. It can generate small React apps, edit existing React apps using deterministic patterns, run them in Chromium through Playwright, collect browser evidence, run interaction checks, and apply deterministic repairs for known failure types.
 
-The MVP loop is:
+The current MVP loop is:
 
 ```text
 implement -> execute -> inspect -> repair
@@ -36,12 +36,12 @@ flowchart LR
 
 Expected outcome: a local research prototype that can create or copy a front-end app, run it in a real browser, collect evidence, test basic interactions, repair known failures, and save auditable run artifacts.
 
-## What Step 2 Supports
+## Current Capabilities
 
-- Text-guided generation of a minimal Vite + React app.
-- Mock dashboard generation with sidebar navigation, summary stats, and a data table.
-- Instruction-guided editing of an existing Vite + React app for a small deterministic pattern set.
-- Diagnostic repair using a local broken fixture.
+- Text-guided generation of minimal Vite + React apps.
+- Deterministic dashboard generation with sidebar navigation, summary stats, and a data table.
+- Instruction-guided editing of existing Vite + React apps for a small deterministic pattern set.
+- Diagnostic repair of existing local fixtures.
 - Browser execution with Playwright and Chromium.
 - Dynamic Vite dev-server ports.
 - Screenshot capture for desktop and mobile viewports.
@@ -53,6 +53,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - Optional OpenAI-backed planning and code generation for `text_generation` tasks.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
+- Written evaluation report at `evaluation/report.md`.
 
 Out of scope for this MVP: general-purpose editing, vision-guided generation, vision-guided editing, local model providers, WebCompass integration, visual-reflection/test-synthesis variants, backend, database, authentication, deployment.
 
@@ -145,6 +146,7 @@ The mock planner/coder recognize dashboard, sidebar navigation, summary stats, a
 
 ```bash
 python -m webpilot.evaluation.runner --tasks-dir webpilot/tasks --variant base --max-iterations 1
+python -m webpilot.evaluation.runner --tasks-dir webpilot/tasks --variant browser-feedback --max-iterations 3
 ```
 
 Evaluation output is written under:
@@ -189,3 +191,7 @@ python -m pytest tests/
 ```
 
 The CLI smoke test skips explicitly if `npm`, the Playwright Python package, or the Chromium browser binary is missing.
+
+## Current Evaluation Snapshot
+
+The latest documented evaluation covers 6 tasks across generation, editing, and diagnostic repair. In the refreshed browser-feedback run, all 6 tasks passed interaction checks. See [evaluation/report.md](evaluation/report.md) for the full table, artifact paths, and case studies.
