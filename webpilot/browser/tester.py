@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,10 +27,14 @@ class InteractionTester:
         results: list[TestResult] = []
         results.append(self._safe("page_loaded", lambda: self._page_loaded(page)))
         results.append(self._safe("expected_sections_visible", lambda: self._expected_sections(page, task)))
-        if _mentions(source, "dashboard", "sidebar", "data table", "stats"):
+        if _mentions(source, "dashboard", "data table", "stats"):
             results.append(self._safe("dashboard_expected_content", lambda: self._dashboard_content(page)))
         if _mentions(source, "nav menu", "navigation menu", "menu opens", "toggle"):
             results.append(self._safe("nav_menu_opens", lambda: self._nav_menu_opens(page)))
+        if _mentions(source, "tab", "tabs", "tab switcher", "switch tabs"):
+            results.append(self._safe("tabs_switch_content", lambda: self._tabs_switch_content(page)))
+        if _mentions(source, "blog", "article", "related posts"):
+            results.append(self._safe("blog_expected_content", lambda: self._blog_content(page)))
         results.append(self._safe("buttons_exist", lambda: self._buttons_exist(page)))
         results.append(self._safe("buttons_clickable_no_page_error", lambda: self._buttons_clickable(page)))
         if _mentions(source, "form", "contact", "email", "message"):
@@ -61,7 +66,10 @@ class InteractionTester:
             "contact": "text=/contact|email|message/i",
         }
         for name, selector in checks.items():
-            if name in source and page.locator(selector).count() == 0:
+            selector_found = page.locator(selector).count() > 0
+            if name == "hero" and not selector_found:
+                selector_found = page.locator(".hero-section").count() > 0
+            if name in source and not selector_found:
                 missing.append(name)
         if missing:
             return TestResult("expected_sections_visible", False, f"Missing expected sections/text: {', '.join(missing)}.")
@@ -87,6 +95,18 @@ class InteractionTester:
             return TestResult("dashboard_expected_content", False, f"Missing dashboard content: {', '.join(missing)}.")
         return TestResult("dashboard_expected_content", True, "Found sidebar, data table, and summary stats.")
 
+    def _blog_content(self, page: Any) -> TestResult:
+        missing: list[str] = []
+        if page.locator("article, .article-layout").count() == 0:
+            missing.append("article")
+        if page.locator("aside, .related-posts").count() == 0:
+            missing.append("related posts sidebar")
+        if page.locator("text=/related posts|field notes|browser grounding|article/i").count() == 0:
+            missing.append("article/related text")
+        if missing:
+            return TestResult("blog_expected_content", False, f"Missing blog content: {', '.join(missing)}.")
+        return TestResult("blog_expected_content", True, "Found article content and related posts.")
+
     def _nav_menu_opens(self, page: Any) -> TestResult:
         before_text = page.locator("body").inner_text(timeout=2000)
         toggle = page.locator(
@@ -101,6 +121,21 @@ class InteractionTester:
         if after_text != before_text or menu_visible:
             return TestResult("nav_menu_opens", True, "Menu content appeared after clicking the toggle.")
         return TestResult("nav_menu_opens", False, "Clicking the nav toggle did not reveal menu content.")
+
+    def _tabs_switch_content(self, page: Any) -> TestResult:
+        tabs = page.locator('[role="tab"], button[data-tab], button:has-text("Overview"), button:has-text("Details")')
+        if tabs.count() < 2:
+            return TestResult("tabs_switch_content", False, "Fewer than 2 tab buttons found.")
+        panel = page.locator('[role="tabpanel"]:visible, .tab-panel:visible, .panel-active:visible').first
+        before_text = panel.inner_text(timeout=2000) if panel.count() > 0 else page.locator("body").inner_text(timeout=2000)
+        tabs.nth(1).click(timeout=2000)
+        page.wait_for_timeout(300)
+        panel_after = page.locator('[role="tabpanel"]:visible, .tab-panel:visible, .panel-active:visible').first
+        after_text = panel_after.inner_text(timeout=2000) if panel_after.count() > 0 else page.locator("body").inner_text(timeout=2000)
+        selected = tabs.nth(1).get_attribute("aria-selected")
+        if after_text != before_text or selected == "true":
+            return TestResult("tabs_switch_content", True, "Tab click changed visible panel content.")
+        return TestResult("tabs_switch_content", False, "Clicking the second tab did not change visible panel content.")
 
     def _buttons_clickable(self, page: Any) -> TestResult:
         before_errors = len(page.context._webpilot_page_errors) if hasattr(page.context, "_webpilot_page_errors") else 0
@@ -181,4 +216,4 @@ def _task_text(task: Task) -> str:
 
 
 def _mentions(source: str, *keywords: str) -> bool:
-    return any(keyword in source for keyword in keywords)
+    return any(re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", source) for keyword in keywords)

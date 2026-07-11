@@ -40,6 +40,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 
 - Text-guided generation of minimal Vite + React apps.
 - Deterministic dashboard generation with sidebar navigation, summary stats, and a data table.
+- Deterministic blog/article generation with a main article column and related-posts sidebar.
 - Instruction-guided editing of existing Vite + React apps for a small deterministic pattern set.
 - Diagnostic repair of existing local fixtures.
 - Browser execution with Playwright and Chromium.
@@ -48,8 +49,9 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - DOM snapshot capture.
 - Console log and page error capture.
 - Basic Playwright interaction checks.
-- Deterministic browser-feedback repairs for known failure types.
+- Deterministic browser-feedback repairs for known failure types, including simple form, overflow, nav menu, and tab-switcher bugs.
 - Heuristic `patch_quality` scoring for repair/editing tasks.
+- Basic `visual_sanity_score` smoke heuristic for nonblank rendered pages and mobile overflow signals.
 - Optional OpenAI-backed planning and code generation for `text_generation` tasks.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
@@ -59,12 +61,13 @@ Out of scope for this MVP: general-purpose editing, vision-guided generation, vi
 
 ## Known Limitations
 
-- The repairer handles only a fixed set of hardcoded failure patterns: missing form fields, missing submit feedback, missing submit handler, mobile horizontal overflow, and a simple nav menu state-toggle repair. Other failures are reported as `no_automated_repair_available`.
-- Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, add newsletter signup, add a simple CTA button, and update simple CTA text/color. It is not a general code editing engine yet.
+- The repairer handles only a fixed set of hardcoded failure patterns: missing form fields, missing submit feedback, missing submit handler, mobile horizontal overflow, a simple nav menu state-toggle repair, and a simple tab-switcher state repair. Other failures are reported as `no_automated_repair_available`.
+- Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, add newsletter signup, add a simple CTA button, add a secondary CTA button, and update simple CTA text/color. It is not a general code editing engine yet.
 - Mock dashboard generation covers static sidebar/stats/table layouts, but not sorting, filtering, pagination, charts, or live data.
+- Mock blog generation covers a static article plus related-posts sidebar, not a general publishing system.
 - With `--llm-provider openai`, Planner and Coder become LLM-driven for generation tasks, but the Repairer remains deterministic for now.
 - Chromium is launched with sandbox workaround args by default: `--no-sandbox` and `--disable-setuid-sandbox`. Set `WEBPILOT_DISABLE_CHROMIUM_SANDBOX_ARGS=1` to disable those args on systems where the browser sandbox works normally.
-- `patch_quality` is a heuristic proxy, not an LLM-judged or human-judged score. It combines localization, diff size, and targetedness. `visual_quality` is still a placeholder and currently returns `None`.
+- `patch_quality` is a heuristic proxy, not an LLM-judged or human-judged score. It combines localization, diff size, and targetedness. `visual_sanity_score` is also a basic heuristic, not a visual judge. `visual_quality` is still the paper-aligned multimodal-judge placeholder and currently returns `None`.
 - Generated repairs are deterministic string edits, not robust AST-aware code transformations.
 
 ## Requirements
@@ -100,6 +103,15 @@ export OPENAI_API_KEY="..."
 python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant browser-feedback --max-iterations 3 --llm-provider openai
 ```
 
+Once a real key is available, the same opt-in flag can be used with another generation task:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+python -m webpilot.cli run --task webpilot/tasks/sample_blog_generation.json --variant browser-feedback --max-iterations 3 --llm-provider openai
+```
+
+The deterministic evaluation in this repository still uses `--llm-provider mock`; the OpenAI command above is the intended manual run path, not an evaluated result.
+
 ## Run Browser Feedback
 
 ```bash
@@ -120,6 +132,12 @@ The nav repair sample verifies the deterministic state-toggle repair:
 python -m webpilot.cli run --task webpilot/tasks/sample_nav_repair.json --variant browser-feedback --max-iterations 3
 ```
 
+The tabs repair sample verifies the deterministic tab-switcher state repair and the `tabs_switch_content` interaction check:
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_tabs_repair.json --variant browser-feedback --max-iterations 3
+```
+
 ## Run Editing
 
 ```bash
@@ -134,6 +152,12 @@ Newsletter editing uses the same fixture and adds a signup form before contact:
 python -m webpilot.cli run --task webpilot/tasks/sample_editing_newsletter.json --variant base --max-iterations 1
 ```
 
+Secondary CTA editing uses the same fixture and adds a second hero action:
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_editing_secondary_cta.json --variant base --max-iterations 1
+```
+
 ## Run Dashboard Generation
 
 ```bash
@@ -141,6 +165,14 @@ python -m webpilot.cli run --task webpilot/tasks/sample_dashboard_generation.jso
 ```
 
 The mock planner/coder recognize dashboard, sidebar navigation, summary stats, and data table instructions and generate `Sidebar.jsx`, `StatsBar.jsx`, and `DataTable.jsx`.
+
+## Run Blog/Article Generation
+
+```bash
+python -m webpilot.cli run --task webpilot/tasks/sample_blog_generation.json --variant base --max-iterations 1
+```
+
+The mock planner/coder recognize blog/article/related-posts instructions and generate `ArticleLayout.jsx` plus `RelatedPosts.jsx`.
 
 ## Run Evaluation
 
@@ -184,6 +216,8 @@ iteration_<n>/
 
 `patch_quality` is computed only for `diagnostic_repair` and `editing` tasks. Formula: `0.4 * localization + 0.3 * size + 0.3 * targetedness`. Localization rewards touching fewer workspace files, size rewards smaller unified diffs, and targetedness rewards applied repairs or deterministic edits. `text_generation` tasks report `null` because there is no patch against an existing repository.
 
+`visual_sanity_score` is a separate browser-evidence smoke heuristic. It checks that the page loaded, the DOM snapshot is not blank, and the mobile overflow check passes when available. It is intentionally not written into `visual_quality`. The paper's `visual_quality` metric requires a real multimodal LLM or visual judge and currently remains `null`.
+
 ## Tests
 
 ```bash
@@ -194,4 +228,4 @@ The CLI smoke test skips explicitly if `npm`, the Playwright Python package, or 
 
 ## Current Evaluation Snapshot
 
-The latest documented evaluation covers 6 tasks across generation, editing, and diagnostic repair. In the refreshed browser-feedback run, all 6 tasks passed interaction checks. See [evaluation/report.md](evaluation/report.md) for the full table, artifact paths, and case studies.
+The latest documented evaluation covers 9 tasks across generation, editing, and diagnostic repair. In the refreshed browser-feedback run, all 9 tasks passed interaction checks. See [evaluation/report.md](evaluation/report.md) for the full table, artifact paths, and case studies.

@@ -63,6 +63,30 @@ def visual_quality() -> None:
     return None
 
 
+def visual_sanity_score(evidence: ExecutionEvidence | None, test_results: list[dict[str, Any]]) -> float:
+    """Basic non-LLM visual sanity heuristic.
+
+    This is intentionally separate from visual_quality. It checks only signals already collected
+    by the browser loop: page loaded, DOM has visible textual content, and the mobile overflow
+    interaction check passes when present. It is not a substitute for multimodal visual judging.
+    """
+    if evidence is None or not evidence.page_loaded:
+        return 0.0
+
+    checks: list[bool] = [True]
+    try:
+        dom_text = evidence.dom_snapshot_path.read_text(encoding="utf-8")
+    except Exception:
+        dom_text = ""
+    checks.append(len(_strip_markup(dom_text).strip()) >= 80)
+
+    overflow_results = [result for result in test_results if result.get("check_name") == "mobile_has_no_horizontal_overflow"]
+    if overflow_results:
+        checks.append(overflow_results[-1].get("passed") is True)
+
+    return round(sum(1 for check in checks if check) / len(checks), 4)
+
+
 def _workspace_file_count(workspace_path: Path) -> int:
     ignored_parts = {"node_modules", "dist", "build", ".git"}
     return sum(
@@ -70,6 +94,20 @@ def _workspace_file_count(workspace_path: Path) -> int:
         for path in workspace_path.rglob("*")
         if path.is_file() and not ignored_parts.intersection(path.relative_to(workspace_path).parts)
     )
+
+
+def _strip_markup(html: str) -> str:
+    text = []
+    in_tag = False
+    for char in html:
+        if char == "<":
+            in_tag = True
+            text.append(" ")
+        elif char == ">":
+            in_tag = False
+        elif not in_tag:
+            text.append(char)
+    return "".join(text)
 
 
 def _modified_files(task_type: str, generated_files: list[str], repairs_attempted: list[dict[str, Any]]) -> list[str]:

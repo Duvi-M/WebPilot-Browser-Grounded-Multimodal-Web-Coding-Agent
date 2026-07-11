@@ -87,6 +87,10 @@ class Coder:
                 )
                 edit_names.append(item.name)
                 messages.append("Updated CTA button text and color.")
+            elif item.name == "SecondaryCTAButton":
+                files_touched.extend(_apply_secondary_cta_edit(workspace_path, item.details.get("label", "View case studies")))
+                edit_names.append(item.name)
+                messages.append("Added secondary CTA button to the hero section.")
             else:
                 messages.append(f"No deterministic edit implemented for {item.name}.")
 
@@ -133,6 +137,10 @@ class Coder:
             files["src/components/StatsBar.jsx"] = _stats_bar()
         if "DataTable" in components:
             files["src/components/DataTable.jsx"] = _data_table()
+        if "ArticleLayout" in components:
+            files["src/components/ArticleLayout.jsx"] = _article_layout(task)
+        if "RelatedPosts" in components:
+            files["src/components/RelatedPosts.jsx"] = _related_posts()
 
         generated: list[str] = []
         for relative_path, content in files.items():
@@ -313,6 +321,33 @@ def _apply_cta_style_update(workspace_path: Path, label: Any, color: Any) -> lis
 }}
 """,
     )
+    return ["src/App.jsx", "src/App.css"]
+
+
+def _apply_secondary_cta_edit(workspace_path: Path, label: Any) -> list[str]:
+    app_path = workspace_path / "src" / "App.jsx"
+    css_path = workspace_path / "src" / "App.css"
+    source = app_path.read_text(encoding="utf-8")
+    if "secondary-cta-button" in source:
+        return ["src/App.jsx"]
+    safe_label = str(label) if isinstance(label, str) and label.strip() else "View case studies"
+    marker = '<a className="cta-button" href="#contact">Talk to us</a>'
+    secondary = f'{marker}\n        <a className="secondary-cta-button" href="#pricing">{safe_label}</a>'
+    if marker in source:
+        app_path.write_text(source.replace(marker, secondary, 1), encoding="utf-8")
+    else:
+        fallback = "</h1>"
+        if fallback not in source:
+            raise ValueError("Could not find a hero heading or primary CTA to place the secondary CTA.")
+        app_path.write_text(
+            source.replace(
+                fallback,
+                fallback + f'\n        <a className="secondary-cta-button" href="#pricing">{safe_label}</a>',
+                1,
+            ),
+            encoding="utf-8",
+        )
+    _append_css_once(css_path, "secondary-cta-button", _secondary_cta_css())
     return ["src/App.jsx", "src/App.css"]
 
 
@@ -550,6 +585,23 @@ def _newsletter_css() -> str:
 """
 
 
+def _secondary_cta_css() -> str:
+    return """.secondary-cta-button {
+  align-items: center;
+  border: 1px solid #246b55;
+  border-radius: 8px;
+  color: #246b55;
+  display: inline-flex;
+  font-weight: 700;
+  justify-content: center;
+  margin-left: 12px;
+  min-height: 44px;
+  padding: 0 18px;
+  text-decoration: none;
+}
+"""
+
+
 def _sidebar() -> str:
     return """const links = ['Overview', 'Reports', 'Customers', 'Settings'];
 
@@ -628,6 +680,62 @@ export function DataTable() {
 """
 
 
+def _article_layout(task: Task) -> str:
+    title = "Designing browser-grounded web agents"
+    if "accessibility" in task.instruction.lower():
+        title = "Building accessible web workflows"
+    return f"""export function ArticleLayout() {{
+  return (
+    <article className="article-layout" aria-labelledby="article-title">
+      <p className="eyebrow">Field notes</p>
+      <h1 id="article-title">{title}</h1>
+      <p className="article-dek">
+        A practical look at how browser evidence, interaction checks, and focused repair loops
+        make generated interfaces easier to trust.
+      </p>
+      <section>
+        <h2>Why browser grounding matters</h2>
+        <p>
+          Static code can look complete while the rendered page still has broken buttons,
+          missing feedback, or responsive layout issues.
+        </p>
+      </section>
+      <section>
+        <h2>What the prototype measures</h2>
+        <p>
+          WebPilot records executability, interaction correctness, patch quality, and basic
+          visual sanity signals from real local browser runs.
+        </p>
+      </section>
+      <button type="button">Save article</button>
+    </article>
+  );
+}}
+"""
+
+
+def _related_posts() -> str:
+    return """const posts = [
+  'Repair loops for front-end agents',
+  'Testing generated dashboards in Chromium',
+  'Why DOM snapshots complement screenshots',
+];
+
+export function RelatedPosts() {
+  return (
+    <aside className="related-posts" aria-label="Related posts">
+      <h2>Related posts</h2>
+      <ul>
+        {posts.map((post) => (
+          <li key={post}><a href="#related">{post}</a></li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
+"""
+
+
 def _package_json() -> str:
     return """{
   "engines": {
@@ -690,6 +798,20 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 
 def _app_jsx(components: set[str]) -> str:
+    if {"ArticleLayout", "RelatedPosts"}.intersection(components):
+        ordered = [name for name in ["ArticleLayout", "RelatedPosts"] if name in components]
+        imports = "\n".join(f"import {{ {name} }} from './components/{name}.jsx';" for name in ordered)
+        article = "      <ArticleLayout />\n" if "ArticleLayout" in components else ""
+        related = "      <RelatedPosts />\n" if "RelatedPosts" in components else ""
+        return f"""{imports}
+
+export default function App() {{
+  return (
+    <main className="app blog-layout">
+{article}{related}    </main>
+  );
+}}
+"""
     if {"Sidebar", "StatsBar", "DataTable"}.intersection(components):
         ordered = [name for name in ["Sidebar", "StatsBar", "DataTable"] if name in components]
         imports = "\n".join(f"import {{ {name} }} from './components/{name}.jsx';" for name in ordered)
@@ -845,6 +967,48 @@ textarea {
   min-height: 100vh;
 }
 
+.blog-layout {
+  display: grid;
+  gap: 32px;
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 0.8fr);
+  padding: 56px max(24px, calc((100vw - 1120px) / 2));
+}
+
+.article-layout,
+.related-posts {
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 28px;
+}
+
+.article-dek {
+  color: #526072;
+  font-size: 1.15rem;
+  line-height: 1.7;
+}
+
+.article-layout p,
+.related-posts li {
+  line-height: 1.8;
+}
+
+.related-posts {
+  align-self: start;
+}
+
+.related-posts ul {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+}
+
+.related-posts a {
+  color: #246b55;
+  font-weight: 700;
+}
+
 .dashboard-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -987,6 +1151,20 @@ button {
   text-decoration: none;
 }
 
+.secondary-cta-button {
+  align-items: center;
+  border: 1px solid #246b55;
+  border-radius: 8px;
+  color: #246b55;
+  display: inline-flex;
+  font-weight: 700;
+  justify-content: center;
+  margin-left: 12px;
+  min-height: 44px;
+  padding: 0 18px;
+  text-decoration: none;
+}
+
 .section-heading {
   margin-bottom: 28px;
   max-width: 680px;
@@ -1055,6 +1233,11 @@ button {
 
   .pricing-grid {
     grid-template-columns: 1fr;
+  }
+
+  .blog-layout {
+    grid-template-columns: 1fr;
+    padding: 44px 20px;
   }
 
   .dashboard-layout {

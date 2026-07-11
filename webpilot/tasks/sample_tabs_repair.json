@@ -1,0 +1,15 @@
+{
+  "id": "task_008",
+  "type": "diagnostic_repair",
+  "instruction": "Diagnose why the tab switcher does not change the visible panel when the Details tab is clicked.",
+  "repo_path": "webpilot/examples/buggy_tabs_app",
+  "expected_behaviors": [
+    "Clicking the Details tab changes the visible tab panel content.",
+    "The active tab state updates after clicking a tab.",
+    "The page should not show runtime console errors."
+  ],
+  "test_hints": [
+    "Click the second tab and verify the visible panel content changes.",
+    "Use the tabs_switch_content interaction check."
+  ]
+}

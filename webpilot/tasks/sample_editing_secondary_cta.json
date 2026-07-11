@@ -1,0 +1,15 @@
+{
+  "id": "task_009",
+  "type": "editing",
+  "instruction": "Add a secondary CTA button in the hero section labeled View case studies.",
+  "repo_path": "webpilot/examples/editable_landing_app",
+  "expected_behaviors": [
+    "The hero section includes a secondary CTA button.",
+    "The secondary CTA button says View case studies.",
+    "The existing primary CTA remains visible."
+  ],
+  "test_hints": [
+    "Look for a secondary CTA in the hero section.",
+    "Check that button-like controls exist."
+  ]
+}

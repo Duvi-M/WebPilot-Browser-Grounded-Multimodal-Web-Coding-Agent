@@ -30,6 +30,8 @@ class Repairer:
                 self._apply_with_record(plan, failure_type, workspace_path, self._repair_overflow)
             elif failure_type == "nav_menu_no_state_toggle":
                 self._apply_with_record(plan, failure_type, workspace_path, self._repair_nav_menu)
+            elif failure_type == "tabs_no_state_switch":
+                self._apply_with_record(plan, failure_type, workspace_path, self._repair_tabs)
             else:
                 plan["skipped_repair_types"].append(failure_type)
                 plan["details"].append(f"No automated repair available for {failure_type}.")
@@ -165,6 +167,40 @@ svg {
 
         return _write_if_changed(target, before, after, "Wired nav menu toggle to React state and visible menu class.")
 
+    def _repair_tabs(self, workspace_path: Path) -> tuple[bool, list[str], list[str], dict[str, str]]:
+        target = _find_tabs_file(workspace_path)
+        if target is None:
+            return False, [], ["No React file containing a tab switcher was found."], {}
+
+        before = target.read_text(encoding="utf-8")
+        after = before
+        if "useState" not in after:
+            if "import React from 'react';" in after:
+                after = after.replace("import React from 'react';", "import React, { useState } from 'react';", 1)
+            elif "from 'react'" in after and "useState" not in after:
+                after = after.replace("import {", "import { useState,", 1)
+            else:
+                after = "import { useState } from 'react';\n" + after
+
+        if "const [activeTab, setActiveTab]" not in after:
+            after = _insert_after_function_open(after, "  const [activeTab, setActiveTab] = useState('overview');\n")
+
+        replacements = {
+            'aria-selected="true" onClick={handleTabClick}': 'aria-selected={activeTab === "overview"} onClick={() => setActiveTab("overview")}',
+            'aria-selected="false" onClick={handleTabClick}': 'aria-selected={activeTab === "details"} onClick={() => setActiveTab("details")}',
+            'className="tab-panel panel-active" role="tabpanel"': 'className={activeTab === "overview" ? "tab-panel panel-active" : "tab-panel"} role="tabpanel" hidden={activeTab !== "overview"}',
+            'className="tab-panel" hidden': 'className={activeTab === "details" ? "tab-panel panel-active" : "tab-panel"} hidden={activeTab !== "details"}',
+            'className="tab-panel" role="tabpanel" hidden': 'className={activeTab === "details" ? "tab-panel panel-active" : "tab-panel"} role="tabpanel" hidden={activeTab !== "details"}',
+            'hidden={true}': 'hidden={activeTab !== "details"}',
+        }
+        for old, new in replacements.items():
+            after = after.replace(old, new)
+
+        if "function handleTabClick()" in after:
+            after = _replace_function_body(after, "handleTabClick", "  function handleTabClick() {\n    setActiveTab('details');\n  }")
+
+        return _write_if_changed(target, before, after, "Wired tab buttons to React state and conditional panels.")
+
 
 def _find_form_file(workspace_path: Path) -> Path | None:
     preferred = workspace_path / "src" / "components" / "ContactForm.jsx"
@@ -184,6 +220,14 @@ def _find_nav_file(workspace_path: Path) -> Path | None:
     for path in sorted((workspace_path / "src").rglob("*.jsx")):
         source = path.read_text(encoding="utf-8")
         if "<nav" in source and "Menu" in source:
+            return path
+    return None
+
+
+def _find_tabs_file(workspace_path: Path) -> Path | None:
+    for path in sorted((workspace_path / "src").rglob("*.jsx")):
+        source = path.read_text(encoding="utf-8")
+        if "tab-panel" in source and ("role=\"tab\"" in source or "data-tab" in source):
             return path
     return None
 

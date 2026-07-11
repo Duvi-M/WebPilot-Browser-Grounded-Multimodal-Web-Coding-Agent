@@ -89,7 +89,7 @@ class Planner:
                     details={"fields": ["name", "email", "message"], "purpose": "Collect contact details."},
                 )
             )
-        if _mentions(source, "dashboard", "sidebar", "data table", "stats"):
+        if _mentions(source, "dashboard", "data table", "stats"):
             if _mentions(source, "dashboard", "sidebar", "navigation"):
                 items.append(
                     PlanItem(
@@ -122,6 +122,22 @@ class Planner:
                         details={"purpose": "Lay out dashboard navigation and main content."},
                     )
                 )
+
+        if _mentions(source, "blog", "article", "related posts", "sidebar of related"):
+            items.append(
+                PlanItem(
+                    name="ArticleLayout",
+                    kind="component",
+                    details={"purpose": "Render a blog-style article with readable sections."},
+                )
+            )
+            items.append(
+                PlanItem(
+                    name="RelatedPosts",
+                    kind="component",
+                    details={"purpose": "Show a sidebar of related posts."},
+                )
+            )
 
         if not items:
             items.append(
@@ -222,6 +238,18 @@ class Planner:
                     },
                 )
             )
+        if _mentions(source, "secondary cta", "secondary call to action", "secondary button"):
+            items.append(
+                PlanItem(
+                    name="SecondaryCTAButton",
+                    kind="edit_target",
+                    details={
+                        "pattern": "add_secondary_cta",
+                        "files": ["src/App.jsx", "src/App.css"],
+                        "label": "View case studies",
+                    },
+                )
+            )
         if _mentions(source, "change", "update") and _mentions(source, "cta", "button") and _mentions(source, "text", "label", "color"):
             items.append(
                 PlanItem(
@@ -235,7 +263,11 @@ class Planner:
                     },
                 )
             )
-        if _mentions(source, "button", "cta", "call to action") and not _mentions(source, "newsletter", "signup", "sign up", "subscribe"):
+        if (
+            _mentions(source, "button", "cta", "call to action")
+            and not _mentions(source, "newsletter", "signup", "sign up", "subscribe")
+            and not _mentions(source, "secondary cta", "secondary call to action", "secondary button")
+        ):
             items.append(
                 PlanItem(
                     name="CTAButton",

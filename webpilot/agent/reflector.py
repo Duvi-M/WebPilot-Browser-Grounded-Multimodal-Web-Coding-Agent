@@ -31,6 +31,8 @@ class Reflector:
             failure_types.append("horizontal_overflow_mobile")
         if "nav_menu_opens" in failed_names:
             failure_types.append("nav_menu_no_state_toggle")
+        if "tabs_switch_content" in failed_names:
+            failure_types.append("tabs_no_state_switch")
 
         if failed and not failure_types:
             failure_types.append("no_automated_repair_available")
@@ -57,6 +59,7 @@ def _recommendation_for(failure_type: str) -> str:
         "missing_submit_feedback": "Render visible confirmation text after form submission.",
         "horizontal_overflow_mobile": "Add CSS rules that prevent horizontal overflow on narrow viewports.",
         "nav_menu_no_state_toggle": "Wire the menu toggle to state and render the nav menu as visible when open.",
+        "tabs_no_state_switch": "Wire tab buttons to state and render the active tab panel conditionally.",
         "missing_button": "Add a visible button or CTA.",
         "page_load_failure": "Inspect npm, Vite, and page load errors.",
         "console_runtime_error": "Inspect console/runtime errors before applying a targeted patch.",

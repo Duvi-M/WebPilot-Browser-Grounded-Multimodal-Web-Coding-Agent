@@ -10,7 +10,7 @@ from webpilot.agent.coder import Coder
 from webpilot.agent.planner import Planner
 from webpilot.agent.reflector import Reflector
 from webpilot.browser.executor import BrowserExecutor, ExecutionEvidence
-from webpilot.evaluation.metrics import executability, interaction_correctness, patch_quality
+from webpilot.evaluation.metrics import executability, interaction_correctness, patch_quality, visual_quality, visual_sanity_score
 from webpilot.logging_utils.run_logger import RunLogger, RunPaths
 from webpilot.llm.base import LLMProvider
 from webpilot.llm.mock_provider import MockLLMProvider
@@ -149,6 +149,8 @@ def _summary(
         "interaction_correctness_status": "passed" if interaction_score == 1.0 else "failed",
         "interaction_correctness_score": interaction_score,
         "patch_quality": patch_quality(task.type, workspace_path, generated_files, repairs_attempted + edit_records),
+        "visual_sanity_score": visual_sanity_score(evidence, test_results),
+        "visual_quality": visual_quality(),
         "failures_found": reflection.get("failed_checks", []),
         "edits_attempted": edit_records,
         "repairs_attempted": repairs_attempted,

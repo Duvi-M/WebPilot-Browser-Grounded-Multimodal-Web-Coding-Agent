@@ -1,0 +1,16 @@
+{
+  "id": "task_007",
+  "type": "text_generation",
+  "instruction": "Build a blog-style article page about browser-grounded web agents with a main article column and a sidebar of related posts.",
+  "repo_path": null,
+  "expected_behaviors": [
+    "A main article is visible.",
+    "A related posts sidebar is visible.",
+    "The page includes a button for saving or sharing the article."
+  ],
+  "test_hints": [
+    "Check article content.",
+    "Check related posts sidebar.",
+    "Check that button-like controls exist."
+  ]
+}
