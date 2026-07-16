@@ -97,7 +97,8 @@ class BrowserExecutor:
                     from playwright.sync_api import sync_playwright
 
                     with sync_playwright() as playwright:
-                        browser = playwright.chromium.launch(args=chromium_launch_args())
+                        headed = os.environ.get("WEBPILOT_HEADED", "").lower() in {"1", "true", "yes"}
+                        browser = playwright.chromium.launch(args=chromium_launch_args(), headless=not headed)
                         context = browser.new_context(viewport={"width": 1440, "height": 1000})
                         setattr(context, "_webpilot_page_errors", page_errors)
                         page = context.new_page()

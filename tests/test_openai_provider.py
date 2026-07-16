@@ -9,7 +9,9 @@ from typing import Any
 import pytest
 
 from webpilot.agent.coder import Coder
+from webpilot.agent.loop import AgentLoop
 from webpilot.agent.planner import Planner
+from webpilot.evaluation.runner import run_evaluation
 from webpilot.llm.base import LLMProvider, LLMProviderError, MissingAPIKeyError
 from webpilot.llm.openai_provider import OpenAIProvider, _AuthProviderError, _TransientProviderError
 from webpilot.task_schema import Task
@@ -18,13 +20,16 @@ from webpilot.task_schema import Task
 def test_openai_provider_successful_call_returns_content() -> None:
     def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
         assert url.endswith("/chat/completions")
-        assert payload["model"]
+        assert payload["model"] == "test-model"
+        assert payload["max_tokens"] == 333
+        assert payload["temperature"] == 0.1
         assert headers["Authorization"] == "Bearer test-key"
         return {"choices": [{"message": {"content": "hello"}}]}
 
-    provider = OpenAIProvider(api_key="test-key", transport=transport)
+    provider = OpenAIProvider(api_key="test-key", model="test-model", max_tokens=333, temperature=0.1, transport=transport)
 
     assert provider.complete("Say hello") == "hello"
+    assert provider.usage_summary()["llm_calls_completed"] == 1
 
 
 def test_openai_provider_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -32,6 +37,49 @@ def test_openai_provider_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(MissingAPIKeyError, match="OPENAI_API_KEY is required"):
         OpenAIProvider()
+
+
+def test_openai_provider_dry_run_logs_prompt_without_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        raise AssertionError("dry-run must not call the API transport")
+
+    provider = OpenAIProvider(dry_run=True, max_llm_calls=1, transport=transport)
+    provider.set_run_context(tmp_path / "llm_calls")
+    task = Task.load("webpilot/tasks/sample_text_generation.json")
+
+    plan = Planner(provider).plan(task)
+
+    assert plan.task_type == "text_generation"
+    usage = provider.usage_summary()
+    assert usage["dry_run_llm"] is True
+    assert usage["llm_calls_attempted"] == 1
+    assert usage["llm_calls_completed"] == 0
+    assert usage["llm_fallback_used"] is True
+    artifact_paths = usage["llm_call_artifact_paths"][0]
+    assert Path(artifact_paths["prompt"]).exists()
+    assert Path(artifact_paths["response"]).read_text(encoding="utf-8").startswith("[DRY RUN]")
+    metadata = json.loads(Path(artifact_paths["metadata"]).read_text(encoding="utf-8"))
+    assert metadata["status"] == "dry_run"
+
+
+def test_openai_malformed_plan_json_falls_back_to_deterministic_plan(tmp_path: Path) -> None:
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "{not-json"}}]}
+
+    provider = OpenAIProvider(api_key="test-key", transport=transport, max_retries=0)
+    provider.set_run_context(tmp_path / "llm_calls")
+    task = Task.load("webpilot/tasks/sample_text_generation.json")
+
+    plan = Planner(provider).plan(task)
+
+    assert {"HeroSection", "PricingSection", "ContactForm"}.issubset({item.name for item in plan.items})
+    usage = provider.usage_summary()
+    assert usage["llm_calls_attempted"] == 1
+    assert usage["llm_calls_completed"] == 1
+    assert usage["llm_fallback_used"] is True
+    assert usage["llm_errors"]
 
 
 def test_openai_provider_retries_transient_transport_errors() -> None:
@@ -197,7 +245,7 @@ def test_cli_flow_accepts_mocked_openai_provider(monkeypatch: pytest.MonkeyPatch
             json.dumps(_llm_file_map()),
         ]
     )
-    monkeypatch.setattr(cli, "_create_llm_provider", lambda name: provider)
+    monkeypatch.setattr(cli, "_create_llm_provider", lambda name, **kwargs: provider)
 
     cli.run_task(
         Path("webpilot/tasks/sample_text_generation.json"),
@@ -209,6 +257,32 @@ def test_cli_flow_accepts_mocked_openai_provider(monkeypatch: pytest.MonkeyPatch
     output = capsys.readouterr().out
     assert "Generated workspace:" in output
     assert "Summary:" in output
+
+
+def test_agent_summary_includes_mock_llm_metadata() -> None:
+    task = Task(
+        id="summary_task",
+        type="text_generation",
+        instruction="Build a hero.",
+        repo_path=None,
+        expected_behaviors=[],
+        test_hints=[],
+    )
+
+    summary = AgentLoop(variant="base", max_iterations=1).run(task).summary
+
+    assert summary["llm_provider"] == "mock"
+    assert summary["dry_run_llm"] is False
+    assert summary["llm_calls_attempted"] == 0
+    assert summary["llm_calls_completed"] == 0
+    assert summary["llm_call_artifact_paths"] == []
+    assert summary["llm_fallback_used"] is False
+    assert summary["llm_errors"] == []
+
+
+def test_evaluation_runner_blocks_openai_batch_without_allow_flag() -> None:
+    with pytest.raises(ValueError, match="OpenAI evaluation batch requires --allow-paid-batch"):
+        run_evaluation(Path("webpilot/tasks"), "browser-feedback", 1, llm_provider_name="openai")
 
 
 class ScriptedProvider(LLMProvider):

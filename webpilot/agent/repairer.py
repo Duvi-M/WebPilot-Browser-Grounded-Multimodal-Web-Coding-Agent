@@ -59,14 +59,29 @@ class Repairer:
         inserts: list[str] = []
         lower = before.lower()
         if 'name="name"' not in lower:
-            inserts.append('        <label>\n          Name\n          <input name="name" type="text" placeholder="Alex Morgan" autoComplete="name" />\n        </label>')
+            inserts.append(
+                '<label>\n'
+                '  Name\n'
+                '  <input name="name" type="text" placeholder="Alex Morgan" autoComplete="name" />\n'
+                '</label>'
+            )
         if 'name="email"' not in lower and 'type="email"' not in lower:
-            inserts.append('        <label>\n          Email\n          <input name="email" type="email" placeholder="alex@example.com" autoComplete="email" />\n        </label>')
+            inserts.append(
+                '<label>\n'
+                '  Email\n'
+                '  <input name="email" type="email" placeholder="alex@example.com" autoComplete="email" />\n'
+                '</label>'
+            )
         if 'name="message"' not in lower:
-            inserts.append('        <label>\n          Message\n          <textarea name="message" placeholder="How can we help?" rows="5" />\n        </label>')
+            inserts.append(
+                '<label>\n'
+                '  Message\n'
+                '  <textarea name="message" placeholder="How can we help?" rows="5" />\n'
+                '</label>'
+            )
 
         if inserts:
-            after = _insert_inside_first_form(after, "\n".join(inserts))
+            after = _insert_before_first_form_button(after, "\n".join(inserts))
 
         return _write_if_changed(target, before, after, "Added missing form fields.")
 
@@ -92,7 +107,10 @@ class Repairer:
             after = after.replace("<form", "<form onSubmit={handleSubmit}", 1)
 
         if "Message sent" not in after:
-            after = after.replace("</form>", "        {submitted && <p role=\"status\" className=\"form-status\">Message sent</p>}\n        </form>", 1)
+            after = _insert_before_first_form_close(
+                after,
+                '{submitted && <p role="status" className="form-status">Message sent</p>}',
+            )
 
         return _write_if_changed(target, before, after, "Added submit handler and visible confirmation feedback.")
 
@@ -250,7 +268,7 @@ def _insert_after_function_open(source: str, insertion: str) -> str:
     return source
 
 
-def _insert_inside_first_form(source: str, insertion: str) -> str:
+def _insert_before_first_form_button(source: str, insertion: str) -> str:
     form_start = source.find("<form")
     form_end = source.find("</form>", form_start)
     if form_start == -1 or form_end == -1:
@@ -260,8 +278,35 @@ def _insert_inside_first_form(source: str, insertion: str) -> str:
     button_index = form_source.find("<button")
     if button_index != -1:
         absolute_button_index = form_start + button_index
-        return source[:absolute_button_index] + insertion + "\n" + source[absolute_button_index:]
-    return source[:form_end] + insertion + "\n" + source[form_end:]
+        insert_at = _line_start_before(source, absolute_button_index)
+        indent = _line_indent_before(source, absolute_button_index)
+        return source[:insert_at] + _indent_block(insertion, indent) + "\n" + source[insert_at:]
+    indent = _line_indent_before(source, form_end) + "  "
+    insert_at = _line_start_before(source, form_end)
+    return source[:insert_at] + _indent_block(insertion, indent) + "\n" + source[insert_at:]
+
+
+def _insert_before_first_form_close(source: str, insertion: str) -> str:
+    form_start = source.find("<form")
+    form_end = source.find("</form>", form_start)
+    if form_start == -1 or form_end == -1:
+        return source
+    indent = _line_indent_before(source, form_end) + "  "
+    insert_at = _line_start_before(source, form_end)
+    return source[:insert_at] + _indent_block(insertion, indent) + "\n" + source[insert_at:]
+
+
+def _line_start_before(source: str, index: int) -> int:
+    return source.rfind("\n", 0, index) + 1
+
+
+def _line_indent_before(source: str, index: int) -> str:
+    line_start = _line_start_before(source, index)
+    return source[line_start:index]
+
+
+def _indent_block(block: str, indent: str) -> str:
+    return "\n".join(indent + line if line else line for line in block.splitlines())
 
 
 def _replace_function_body(source: str, function_name: str, replacement: str) -> str:

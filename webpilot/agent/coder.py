@@ -901,27 +901,37 @@ export function PricingSection() {
 
 
 def _contact_form() -> str:
-    return """export function ContactForm() {
+    return """import { useState } from 'react';
+
+export function ContactForm() {
+  const [submitted, setSubmitted] = useState(false);
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitted(true);
+  }
+
   return (
     <section className="contact-section" id="contact" aria-labelledby="contact-title">
       <div className="section-heading">
         <p className="eyebrow">Contact</p>
         <h2 id="contact-title">Tell us what your team needs</h2>
       </div>
-      <form className="contact-form">
-        <label>
+      <form className="contact-form" onSubmit={handleSubmit}>
+        <label htmlFor="contact-name">
           Name
-          <input name="name" type="text" placeholder="Alex Morgan" autoComplete="name" />
+          <input id="contact-name" name="name" type="text" placeholder="Alex Morgan" autoComplete="name" />
         </label>
-        <label>
+        <label htmlFor="contact-email">
           Email
-          <input name="email" type="email" placeholder="alex@example.com" autoComplete="email" />
+          <input id="contact-email" name="email" type="email" placeholder="alex@example.com" autoComplete="email" />
         </label>
-        <label>
+        <label htmlFor="contact-message">
           Message
-          <textarea name="message" placeholder="What workflow should we help you improve?" rows="5" />
+          <textarea id="contact-message" name="message" placeholder="What workflow should we help you improve?" rows="5" />
         </label>
         <button type="submit">Send message</button>
+        {submitted && <p role="status" className="form-status">Message sent</p>}
       </form>
     </section>
   );

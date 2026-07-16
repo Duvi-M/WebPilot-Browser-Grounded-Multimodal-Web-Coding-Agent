@@ -10,6 +10,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 DEFAULT_RUNS_DIR = PROJECT_ROOT / "runs"
 DEFAULT_OPENAI_MODEL = os.environ.get("WEBPILOT_OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_OPENAI_MAX_TOKENS = 1200
+DEFAULT_OPENAI_TEMPERATURE = 0.2
 
 PLAYWRIGHT_CHROMIUM_SANDBOX_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"]
 

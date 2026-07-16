@@ -39,12 +39,13 @@ class AgentLoop:
         self.llm_provider = llm_provider or MockLLMProvider()
         self.logger = RunLogger()
         self.planner = Planner(self.llm_provider)
-        self.coder = Coder(self.llm_provider)
+        self.coder = Coder()
         self.executor = BrowserExecutor()
         self.reflector = Reflector()
 
     def run(self, task: Task) -> AgentRunResult:
         paths = self.logger.create_run(task)
+        _set_llm_context(self.llm_provider, paths.iteration_dir / "llm_calls")
         plan = self.planner.plan(task)
         self.logger.write_plan(paths, plan.to_dict())
         code_result = self.coder.code(task, plan, paths.workspace_dir)
@@ -104,6 +105,7 @@ class AgentLoop:
             workspace_path=paths.workspace_dir,
             generated_files=code_result.generated_files,
             edit_records=edit_records,
+            llm_usage=_llm_usage(self.llm_provider),
         )
         self.logger.write_json(paths.summary_path, summary)
         return AgentRunResult(paths.run_dir, paths.workspace_dir, paths.summary_path, summary)
@@ -125,6 +127,7 @@ def _summary(
     workspace_path: Path,
     generated_files: list[str],
     edit_records: list[dict[str, Any]],
+    llm_usage: dict[str, Any],
 ) -> dict[str, Any]:
     executable = executability(evidence)
     interaction_score = interaction_correctness(test_results)
@@ -138,7 +141,7 @@ def _summary(
     else:
         final_status = "failed"
 
-    return {
+    summary = {
         "task_id": task.id,
         "task_type": task.type,
         "variant": variant,
@@ -156,4 +159,30 @@ def _summary(
         "repairs_attempted": repairs_attempted,
         "artifact_paths": artifact_paths,
         "final_workspace_path": str(workspace_path),
+    }
+    summary.update(llm_usage)
+    return summary
+
+
+def _set_llm_context(provider: LLMProvider, llm_calls_dir: Path) -> None:
+    setter = getattr(provider, "set_run_context", None)
+    if callable(setter):
+        setter(llm_calls_dir)
+
+
+def _llm_usage(provider: LLMProvider) -> dict[str, Any]:
+    usage = getattr(provider, "usage_summary", None)
+    if callable(usage):
+        return usage()
+    provider_name = getattr(provider, "provider_name", "mock")
+    return {
+        "llm_provider": provider_name,
+        "openai_model": None,
+        "dry_run_llm": False,
+        "max_llm_calls": 0,
+        "llm_calls_attempted": 0,
+        "llm_calls_completed": 0,
+        "llm_call_artifact_paths": [],
+        "llm_fallback_used": False,
+        "llm_errors": [],
     }

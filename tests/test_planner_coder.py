@@ -33,9 +33,20 @@ def test_coder_generates_real_vite_react_app(tmp_path: Path) -> None:
     assert "ContactForm" in app_jsx.read_text(encoding="utf-8")
 
     contact_source = contact_form.read_text(encoding="utf-8")
+    assert "useState" in contact_source
+    assert "onSubmit={handleSubmit}" in contact_source
+    assert "preventDefault" in contact_source
+    assert "Message sent" in contact_source
+    assert 'role="status"' in contact_source
     assert 'name="name"' in contact_source
     assert 'name="email"' in contact_source
     assert 'name="message"' in contact_source
+    assert 'htmlFor="contact-name"' in contact_source
+    assert 'id="contact-name"' in contact_source
+    assert 'htmlFor="contact-email"' in contact_source
+    assert 'id="contact-email"' in contact_source
+    assert 'htmlFor="contact-message"' in contact_source
+    assert 'id="contact-message"' in contact_source
     assert "src/components/PricingSection.jsx" in result.generated_files
 
 
@@ -72,6 +83,11 @@ def test_apply_repair_delegates_to_repairer(tmp_path: Path) -> None:
     app_source = (workspace / "src" / "App.jsx").read_text(encoding="utf-8")
     assert 'name="message"' in app_source
     assert "Message sent" in app_source
+    assert "\n        <textarea name=\"message\"" in app_source
+    assert "\n      <button type=\"submit\"" in app_source
+    assert "\n      {submitted && <p role=\"status\"" in app_source
+    assert "\n<button" not in app_source
+    assert "\n</form>" not in app_source
     assert "overflow-x: hidden" in (workspace / "src" / "App.css").read_text(encoding="utf-8")
 
 

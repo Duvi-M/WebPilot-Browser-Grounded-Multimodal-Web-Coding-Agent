@@ -34,7 +34,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - Deterministic browser-feedback repairs for known failure types, including simple form, overflow, nav menu, and tab-switcher bugs.
 - Heuristic `patch_quality` scoring for repair/editing tasks.
 - Basic `visual_sanity_score` smoke heuristic for nonblank rendered pages and mobile overflow signals.
-- Optional OpenAI-backed planning and code generation for `text_generation` tasks.
+- Optional OpenAI-backed planning with prompt logging, dry-run mode, and call budgets.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
 - Written evaluation report at `evaluation/report.md`.
@@ -47,7 +47,7 @@ Out of scope for this MVP: general-purpose editing, vision-guided generation, vi
 - Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, add newsletter signup, add a simple CTA button, add a secondary CTA button, and update simple CTA text/color. It is not a general code editing engine yet.
 - Mock dashboard generation covers static sidebar/stats/table layouts, but not sorting, filtering, pagination, charts, or live data.
 - Mock blog generation covers a static article plus related-posts sidebar, not a general publishing system.
-- With `--llm-provider openai`, Planner and Coder become LLM-driven for generation tasks, but the Repairer remains deterministic for now.
+- With `--llm-provider openai`, the agent can use OpenAI for structured planning while keeping deterministic coding and repair as the safe default for now.
 - Chromium is launched with sandbox workaround args by default: `--no-sandbox` and `--disable-setuid-sandbox`. Set `WEBPILOT_DISABLE_CHROMIUM_SANDBOX_ARGS=1` to disable those args on systems where the browser sandbox works normally.
 - `patch_quality` is a heuristic proxy, not an LLM-judged or human-judged score. It combines localization, diff size, and targetedness. `visual_sanity_score` is also a basic heuristic, not a visual judge. `visual_quality` is still the paper-aligned multimodal-judge placeholder and currently returns `None`.
 - Generated repairs are deterministic string edits, not robust AST-aware code transformations.
@@ -78,21 +78,62 @@ Mock mode is the default and does not call any external API:
 python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant base --max-iterations 1 --llm-provider mock
 ```
 
-To use OpenAI for planning and generation, set an API key and opt in explicitly. Real API calls cost money.
+## Using OpenAI Safely
+
+Mock mode is the default. It does not call external APIs and is the recommended mode for normal development and evaluation:
 
 ```bash
-export OPENAI_API_KEY="..."
-python -m webpilot.cli run --task webpilot/tasks/sample_text_generation.json --variant browser-feedback --max-iterations 3 --llm-provider openai
+python3 -m webpilot.cli run \
+  --task webpilot/tasks/sample_text_generation.json \
+  --variant base \
+  --max-iterations 1 \
+  --llm-provider mock
 ```
 
-Once a real key is available, the same opt-in flag can be used with another generation task:
+OpenAI is opt-in. Set `OPENAI_API_KEY` only when you are ready to make a real paid call. You can choose the model and sampling parameters with:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-python -m webpilot.cli run --task webpilot/tasks/sample_blog_generation.json --variant browser-feedback --max-iterations 3 --llm-provider openai
+export WEBPILOT_OPENAI_MODEL="gpt-4o-mini"
+export WEBPILOT_OPENAI_MAX_TOKENS="1200"
+export WEBPILOT_OPENAI_TEMPERATURE="0.2"
 ```
 
-The deterministic evaluation in this repository still uses `--llm-provider mock`; the OpenAI command above is the intended manual run path, not an evaluated result.
+Always inspect prompts with dry-run mode before spending credits. Dry-run logs prompt artifacts under `runs/<task_id>/<timestamp>/iteration_0/llm_calls/` and does not call the API:
+
+```bash
+python3 -m webpilot.cli run \
+  --task webpilot/tasks/sample_text_generation.json \
+  --variant browser-feedback \
+  --max-iterations 1 \
+  --llm-provider openai \
+  --dry-run-llm \
+  --max-llm-calls 1
+```
+
+For one deliberate tiny real run, remove `--dry-run-llm` and keep `--max-llm-calls 1`:
+
+```bash
+python3 -m webpilot.cli run \
+  --task webpilot/tasks/sample_text_generation.json \
+  --variant browser-feedback \
+  --max-iterations 1 \
+  --llm-provider openai \
+  --max-llm-calls 1
+```
+
+Do not run evaluation batches with OpenAI until prompts have been inspected. The evaluation runner blocks OpenAI batches unless you explicitly pass `--allow-paid-batch`:
+
+```bash
+python3 -m webpilot.evaluation.runner \
+  --tasks-dir webpilot/tasks \
+  --variant browser-feedback \
+  --llm-provider openai \
+  --allow-paid-batch \
+  --max-llm-calls 3
+```
+
+The current OpenAI integration is intentionally narrow: it is used for structured planning first. Deterministic coding and deterministic safe repairs remain the default execution path.
 
 ## Run Browser Feedback
 

@@ -55,11 +55,24 @@ class Planner:
         try:
             return _parse_plan_json(self.llm_provider.complete(prompt))
         except (json.JSONDecodeError, ValueError, LLMProviderError) as first_error:
+            if _falls_back_without_retry(self.llm_provider):
+                _record_provider_fallback(self.llm_provider, f"LLM planner fallback after first failure: {first_error}")
+                return self._plan_deterministically(task)
             retry_prompt = _plan_prompt(task, retry=True, previous_error=str(first_error))
             try:
                 return _parse_plan_json(self.llm_provider.complete(retry_prompt))
             except (json.JSONDecodeError, ValueError, LLMProviderError) as second_error:
+                if _falls_back_without_retry(self.llm_provider):
+                    _record_provider_fallback(self.llm_provider, f"LLM planner fallback after retry failure: {second_error}")
+                    return self._plan_deterministically(task)
                 raise LLMProviderError(f"LLM planner returned invalid plan JSON after retry: {second_error}") from second_error
+
+    def _plan_deterministically(self, task: Task) -> Plan:
+        if task.type == "text_generation":
+            return self._plan_generation(task)
+        if task.type == "editing":
+            return self._plan_editing(task)
+        return self._plan_repair(task)
 
     def _plan_generation(self, task: Task) -> Plan:
         source = _task_text(task)
@@ -307,6 +320,16 @@ def _mentions(source: str, *keywords: str) -> bool:
 
 def _uses_llm(provider: LLMProvider) -> bool:
     return getattr(provider, "provider_name", "mock") != "mock"
+
+
+def _falls_back_without_retry(provider: LLMProvider) -> bool:
+    return hasattr(provider, "usage_summary")
+
+
+def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    record = getattr(provider, "record_fallback", None)
+    if callable(record):
+        record(reason)
 
 
 def _plan_prompt(task: Task, retry: bool, previous_error: str | None = None) -> str:
