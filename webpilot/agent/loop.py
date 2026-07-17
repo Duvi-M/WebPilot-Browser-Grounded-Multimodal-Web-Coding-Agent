@@ -31,15 +31,26 @@ class AgentRunResult:
 class AgentLoop:
     """Coordinates plan, code, browser execution, reflection, and optional repair."""
 
-    def __init__(self, variant: Variant = "base", max_iterations: int = 1, llm_provider: LLMProvider | None = None) -> None:
+    def __init__(
+        self,
+        variant: Variant = "base",
+        max_iterations: int = 1,
+        llm_provider: LLMProvider | None = None,
+        llm_coder: bool = False,
+        llm_reflector: bool = False,
+        llm_repair: bool = False,
+    ) -> None:
         if max_iterations < 1:
             raise ValueError("--max-iterations must be at least 1")
         self.variant = variant
         self.max_iterations = max_iterations
         self.llm_provider = llm_provider or MockLLMProvider()
+        self.llm_coder = llm_coder and _provider_is_llm(self.llm_provider)
+        self.llm_reflector = llm_reflector and _provider_is_llm(self.llm_provider)
+        self.llm_repair = llm_repair and _provider_is_llm(self.llm_provider)
         self.logger = RunLogger()
         self.planner = Planner(self.llm_provider)
-        self.coder = Coder()
+        self.coder = Coder(self.llm_provider if self.llm_coder else None)
         self.executor = BrowserExecutor()
         self.reflector = Reflector()
 
@@ -106,6 +117,11 @@ class AgentLoop:
             generated_files=code_result.generated_files,
             edit_records=edit_records,
             llm_usage=_llm_usage(self.llm_provider),
+            llm_agents={
+                "llm_coder": self.llm_coder,
+                "llm_reflector": self.llm_reflector,
+                "llm_repair": self.llm_repair,
+            },
         )
         self.logger.write_json(paths.summary_path, summary)
         return AgentRunResult(paths.run_dir, paths.workspace_dir, paths.summary_path, summary)
@@ -128,6 +144,7 @@ def _summary(
     generated_files: list[str],
     edit_records: list[dict[str, Any]],
     llm_usage: dict[str, Any],
+    llm_agents: dict[str, bool],
 ) -> dict[str, Any]:
     executable = executability(evidence)
     interaction_score = interaction_correctness(test_results)
@@ -159,6 +176,7 @@ def _summary(
         "repairs_attempted": repairs_attempted,
         "artifact_paths": artifact_paths,
         "final_workspace_path": str(workspace_path),
+        "llm_agents": llm_agents,
     }
     summary.update(llm_usage)
     return summary
@@ -186,3 +204,7 @@ def _llm_usage(provider: LLMProvider) -> dict[str, Any]:
         "llm_fallback_used": False,
         "llm_errors": [],
     }
+
+
+def _provider_is_llm(provider: LLMProvider) -> bool:
+    return getattr(provider, "provider_name", "mock") != "mock"
