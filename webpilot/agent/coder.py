@@ -33,10 +33,26 @@ class Coder:
     def code(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
         if task.type == "text_generation":
             if _uses_llm(self.llm_provider):
-                return self._generate_react_app_with_llm(task, plan, workspace_path)
+                try:
+                    return self._generate_react_app_with_llm(task, plan, workspace_path)
+                except (json.JSONDecodeError, ValueError, LLMProviderError) as exc:
+                    _record_provider_fallback(self.llm_provider, f"LLM coder fallback for text_generation: {exc}")
+                    return self._generate_react_app(task, plan, workspace_path)
             return self._generate_react_app(task, plan, workspace_path)
         if task.type == "editing":
             result = self._copy_existing_workspace(task, workspace_path, "Copied editable repository.")
+            if _uses_llm(self.llm_provider):
+                try:
+                    edit_result = self._apply_edit_with_llm(task, plan, workspace_path)
+                    generated_files = sorted(set(result.generated_files + edit_result["files_touched"]))
+                    return CoderResult(
+                        workspace_path=workspace_path,
+                        generated_files=generated_files,
+                        message="Copied repository and applied LLM edit.",
+                        change_records=[edit_result],
+                    )
+                except (json.JSONDecodeError, ValueError, LLMProviderError, OSError) as exc:
+                    _record_provider_fallback(self.llm_provider, f"LLM coder fallback for editing: {exc}")
             edit_result = self.apply_edit(plan, workspace_path)
             generated_files = sorted(set(result.generated_files + edit_result["files_touched"]))
             return CoderResult(
@@ -158,10 +174,7 @@ class Coder:
     def _generate_react_app_with_llm(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
         workspace_path.mkdir(parents=True, exist_ok=True)
         prompt = _code_prompt(task, plan)
-        try:
-            files = _parse_file_map(self.llm_provider.complete(prompt))
-        except (json.JSONDecodeError, ValueError, LLMProviderError) as exc:
-            raise LLMProviderError(f"LLM coder returned invalid file JSON: {exc}") from exc
+        files = _parse_file_map(self.llm_provider.complete(prompt), require_vite_files=True)
 
         generated: list[str] = []
         for relative_path, content in files.items():
@@ -175,6 +188,35 @@ class Coder:
             generated_files=sorted(generated),
             message="Generated a Vite + React workspace with LLM provider.",
         )
+
+    def _apply_edit_with_llm(self, task: Task, plan: Plan, workspace_path: Path) -> dict[str, Any]:
+        before = _snapshot_workspace_files(workspace_path)
+        prompt = _edit_prompt(task, plan, before)
+        files = _parse_file_map(self.llm_provider.complete(prompt), require_vite_files=False)
+        if not files:
+            raise ValueError("LLM edit returned no files")
+
+        files_touched: list[str] = []
+        for relative_path, content in files.items():
+            target = _safe_workspace_path(workspace_path, relative_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            files_touched.append(relative_path)
+
+        touched = sorted(set(files_touched))
+        diffs = _diff_touched_files(workspace_path, before, touched)
+        if not diffs:
+            raise ValueError("LLM edit did not modify any files")
+        files_modified = [str((workspace_path / path).resolve()) for path in touched if path in diffs]
+        return {
+            "edits_applied": True,
+            "edit_types_applied": ["LLMEdit"],
+            "files_touched": touched,
+            "files_modified": files_modified,
+            "diffs": {str((workspace_path / path).resolve()): diff for path, diff in diffs.items()},
+            "messages": ["Applied LLM full-file edit."],
+            "llm_edit": True,
+        }
 
     def _copy_repair_workspace(self, task: Task, workspace_path: Path) -> CoderResult:
         return self._copy_existing_workspace(task, workspace_path, "Copied diagnostic repair repository.")
@@ -1275,6 +1317,12 @@ def _uses_llm(provider: LLMProvider) -> bool:
     return getattr(provider, "provider_name", "mock") != "mock"
 
 
+def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    record = getattr(provider, "record_fallback", None)
+    if callable(record):
+        record(reason)
+
+
 def _code_prompt(task: Task, plan: Plan) -> str:
     return f"""Generate a minimal runnable Vite + React app for this WebPilot task.
 
@@ -1300,17 +1348,43 @@ Plan:
 """
 
 
-def _parse_file_map(raw: str) -> dict[str, str]:
+def _edit_prompt(task: Task, plan: Plan, files: dict[str, str]) -> str:
+    compact_files = {
+        path: content
+        for path, content in files.items()
+        if path.endswith((".jsx", ".js", ".css", ".html", ".json")) and len(content) <= 40_000
+    }
+    return f"""Edit an existing Vite + React workspace for this WebPilot task.
+
+Return JSON only: an object mapping relative file paths to complete replacement file contents.
+Return only files that must be modified or added.
+Do not include markdown fences or explanations.
+Do not modify package lock files, node_modules, dist, or unrelated files.
+Preserve the existing project structure and make the smallest targeted edit.
+
+Task:
+{json.dumps(task.to_dict(), indent=2)}
+
+Plan:
+{json.dumps(plan.to_dict(), indent=2)}
+
+Current files:
+{json.dumps(compact_files, indent=2)}
+"""
+
+
+def _parse_file_map(raw: str, require_vite_files: bool) -> dict[str, str]:
     data = json.loads(_strip_json_fence(raw))
     if not isinstance(data, dict):
         raise ValueError("file output must be a JSON object")
     if len(data) > 32:
         raise ValueError("LLM output contains too many files")
 
-    required = {"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/App.css"}
-    missing = required.difference(data)
-    if missing:
-        raise ValueError(f"LLM output missing required files: {sorted(missing)}")
+    if require_vite_files:
+        required = {"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/App.css"}
+        missing = required.difference(data)
+        if missing:
+            raise ValueError(f"LLM output missing required files: {sorted(missing)}")
 
     files: dict[str, str] = {}
     for relative_path, content in data.items():
