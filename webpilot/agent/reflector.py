@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from webpilot.browser.executor import ExecutionEvidence
+from webpilot.llm.base import LLMProvider, LLMProviderError
+from webpilot.llm.mock_provider import MockLLMProvider
+from webpilot.task_schema import Task
 
 
 class Reflector:
     """Classifies known failure modes without calling an LLM."""
+
+    def __init__(self, llm_provider: LLMProvider | None = None) -> None:
+        self.llm_provider = llm_provider or MockLLMProvider()
 
     def reflect(self, evidence: ExecutionEvidence, test_results: list[dict[str, Any]]) -> dict[str, Any]:
         failed = [result for result in test_results if not result.get("passed", False)]
@@ -51,6 +58,43 @@ class Reflector:
             "repair_recommendations": recommendations,
         }
 
+    def reflect_with_context(
+        self,
+        task: Task,
+        evidence: ExecutionEvidence,
+        test_results: list[dict[str, Any]],
+        previous_iteration_summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        deterministic = self.reflect(evidence, test_results)
+        if not _uses_llm(self.llm_provider):
+            return deterministic
+
+        prompt = _reflection_prompt(task, evidence, test_results, deterministic, previous_iteration_summary)
+        try:
+            parsed = _parse_reflection_json(self.llm_provider.complete(prompt))
+        except (json.JSONDecodeError, ValueError, LLMProviderError) as exc:
+            _record_provider_fallback(self.llm_provider, f"LLM reflector fallback: {exc}")
+            deterministic["llm_reflection_fallback"] = True
+            deterministic["llm_reflection_error"] = str(exc)
+            return deterministic
+
+        reflection = dict(deterministic)
+        reflection.update(
+            {
+                "likely_root_cause": parsed["likely_root_cause"],
+                "confidence": parsed["confidence"],
+                "repair_strategy": parsed["repair_strategy"],
+                "files_likely_involved": parsed["files_likely_involved"],
+                "short_reasoning": parsed["short_reasoning"],
+                "llm_reflection": True,
+                "llm_reflection_fallback": False,
+            }
+        )
+        if parsed.get("likely_failure_types"):
+            reflection["likely_failure_types"] = parsed["likely_failure_types"]
+            reflection["repair_recommendations"] = [parsed["repair_strategy"]]
+        return reflection
+
 
 def _recommendation_for(failure_type: str) -> str:
     recommendations = {
@@ -73,3 +117,135 @@ def _read_json(path: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
+
+
+def _uses_llm(provider: LLMProvider) -> bool:
+    return getattr(provider, "provider_name", "mock") != "mock"
+
+
+def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    record = getattr(provider, "record_fallback", None)
+    if callable(record):
+        record(reason)
+
+
+def _reflection_prompt(
+    task: Task,
+    evidence: ExecutionEvidence,
+    test_results: list[dict[str, Any]],
+    deterministic_reflection: dict[str, Any],
+    previous_iteration_summary: dict[str, Any] | None,
+) -> str:
+    failed_tests = [result for result in test_results if not result.get("passed", False)]
+    return f"""Reflect on this WebPilot browser execution and return strict JSON only.
+
+Required JSON schema:
+{{
+  "likely_root_cause": "short text",
+  "confidence": 0.0,
+  "repair_strategy": "short actionable strategy",
+  "files_likely_involved": ["relative/path.ext"],
+  "short_reasoning": "brief reasoning",
+  "likely_failure_types": ["optional known failure type"]
+}}
+
+Use confidence from 0.0 to 1.0.
+Prefer known failure types when applicable: missing_form_field, submit_button_no_handler,
+missing_submit_feedback, horizontal_overflow_mobile, nav_menu_no_state_toggle,
+tabs_no_state_switch, missing_button, page_load_failure, console_runtime_error,
+no_automated_repair_available.
+
+Task:
+{json.dumps(task.to_dict(), indent=2)}
+
+Execution summary:
+{json.dumps(_evidence_summary(evidence), indent=2)}
+
+Failed interaction tests:
+{json.dumps(failed_tests, indent=2)}
+
+Console errors/logs:
+{json.dumps(_read_json(evidence.console_logs_path), indent=2)[:6000]}
+
+Page errors:
+{json.dumps(_read_json(evidence.page_errors_path), indent=2)[:4000]}
+
+DOM summary:
+{_dom_summary(evidence.dom_snapshot_path)}
+
+Screenshot paths:
+{json.dumps({"desktop": str(evidence.desktop_screenshot_path), "mobile": str(evidence.mobile_screenshot_path)}, indent=2)}
+
+Deterministic reflection:
+{json.dumps(deterministic_reflection, indent=2)}
+
+Previous iteration summary:
+{json.dumps(previous_iteration_summary or {}, indent=2)}
+"""
+
+
+def _evidence_summary(evidence: ExecutionEvidence) -> dict[str, Any]:
+    return {
+        "npm_install_ok": evidence.npm_install_ok,
+        "server_started": evidence.server_started,
+        "page_loaded": evidence.page_loaded,
+        "fatal_page_error": evidence.fatal_page_error,
+        "console_error_count": evidence.console_error_count,
+        "page_error_count": evidence.page_error_count,
+        "current_url": evidence.current_url,
+        "title": evidence.title,
+        "dom_snapshot_path": str(evidence.dom_snapshot_path),
+    }
+
+
+def _dom_summary(path: Path) -> str:
+    try:
+        html = path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    text = " ".join(html.replace("<", " <").split())
+    return text[:4000]
+
+
+def _parse_reflection_json(raw: str) -> dict[str, Any]:
+    data = json.loads(_strip_json_fence(raw))
+    if not isinstance(data, dict):
+        raise ValueError("reflection output must be a JSON object")
+    root_cause = data.get("likely_root_cause")
+    confidence = data.get("confidence")
+    strategy = data.get("repair_strategy")
+    files = data.get("files_likely_involved", [])
+    reasoning = data.get("short_reasoning")
+    failure_types = data.get("likely_failure_types", [])
+    if not isinstance(root_cause, str) or not root_cause.strip():
+        raise ValueError("likely_root_cause must be a non-empty string")
+    if not isinstance(confidence, (int, float)):
+        raise ValueError("confidence must be numeric")
+    if not isinstance(strategy, str) or not strategy.strip():
+        raise ValueError("repair_strategy must be a non-empty string")
+    if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
+        raise ValueError("files_likely_involved must be a list of strings")
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        raise ValueError("short_reasoning must be a non-empty string")
+    if not isinstance(failure_types, list) or not all(isinstance(item, str) for item in failure_types):
+        raise ValueError("likely_failure_types must be a list of strings")
+    return {
+        "likely_root_cause": root_cause,
+        "confidence": max(0.0, min(1.0, float(confidence))),
+        "repair_strategy": strategy,
+        "files_likely_involved": files,
+        "short_reasoning": reasoning,
+        "likely_failure_types": failure_types,
+    }
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from webpilot.agent.coder import Coder
 from webpilot.agent.planner import Planner
 from webpilot.agent.reflector import Reflector
+from webpilot.agent.repairer import Repairer
 from webpilot.browser.executor import BrowserExecutor, ExecutionEvidence
 from webpilot.evaluation.metrics import executability, interaction_correctness, patch_quality, visual_quality, visual_sanity_score
 from webpilot.logging_utils.run_logger import RunLogger, RunPaths
@@ -52,7 +53,7 @@ class AgentLoop:
         self.planner = Planner(self.llm_provider)
         self.coder = Coder(self.llm_provider if self.llm_coder else None)
         self.executor = BrowserExecutor()
-        self.reflector = Reflector()
+        self.reflector = Reflector(self.llm_provider if self.llm_reflector else None)
 
     def run(self, task: Task) -> AgentRunResult:
         paths = self.logger.create_run(task)
@@ -79,6 +80,7 @@ class AgentLoop:
         final_evidence: ExecutionEvidence | None = None
         final_tests: list[dict[str, Any]] = []
         iterations_run = 0
+        previous_iteration_summary: dict[str, Any] | None = None
 
         for index in range(self.max_iterations):
             iteration_dir = _iteration_dir(paths, index)
@@ -89,9 +91,23 @@ class AgentLoop:
             final_evidence = browser_result.evidence
             final_tests = [result.to_dict() for result in browser_result.test_results]
             self.logger.write_json(iteration_dir / "test_results.json", {"results": final_tests})
-            final_reflection = self.reflector.reflect(browser_result.evidence, final_tests)
+            if self.llm_reflector:
+                final_reflection = self.reflector.reflect_with_context(
+                    task,
+                    browser_result.evidence,
+                    final_tests,
+                    previous_iteration_summary=previous_iteration_summary,
+                )
+            else:
+                final_reflection = self.reflector.reflect(browser_result.evidence, final_tests)
             self.logger.write_json(iteration_dir / "reflection.json", final_reflection)
             artifact_paths["iterations"][f"iteration_{index}"] = str(iteration_dir)
+            previous_iteration_summary = {
+                "iteration": index,
+                "passed": final_reflection.get("passed"),
+                "failed_checks": final_reflection.get("failed_checks", []),
+                "likely_failure_types": final_reflection.get("likely_failure_types", []),
+            }
 
             if final_reflection.get("passed"):
                 break
@@ -100,7 +116,22 @@ class AgentLoop:
             if index >= self.max_iterations - 1:
                 break
 
-            repair_plan = self.coder.apply_repair(final_reflection, paths.workspace_dir)
+            if self.llm_repair:
+                repair_plan = Repairer(self.llm_provider).repair(
+                    final_reflection,
+                    paths.workspace_dir,
+                    task=task,
+                    artifact_paths={
+                        "iteration_dir": str(iteration_dir),
+                        "console_logs": str(final_evidence.console_logs_path) if final_evidence else None,
+                        "page_errors": str(final_evidence.page_errors_path) if final_evidence else None,
+                        "dom_snapshot": str(final_evidence.dom_snapshot_path) if final_evidence else None,
+                        "desktop_screenshot": str(final_evidence.desktop_screenshot_path) if final_evidence else None,
+                        "mobile_screenshot": str(final_evidence.mobile_screenshot_path) if final_evidence else None,
+                    },
+                )
+            else:
+                repair_plan = self.coder.apply_repair(final_reflection, paths.workspace_dir)
             repairs_attempted.append(repair_plan)
             self.logger.write_json(iteration_dir / "repair_plan.json", repair_plan)
 

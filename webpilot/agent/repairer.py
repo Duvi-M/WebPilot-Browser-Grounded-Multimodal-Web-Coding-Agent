@@ -3,14 +3,33 @@
 from __future__ import annotations
 
 import difflib
+import json
 from pathlib import Path
 from typing import Any
+
+from webpilot.llm.base import LLMProvider, LLMProviderError
+from webpilot.llm.mock_provider import MockLLMProvider
+from webpilot.task_schema import Task
 
 
 class Repairer:
     """Applies localized file edits for known browser-feedback failure types."""
 
-    def repair(self, reflection: dict[str, Any], workspace_path: Path) -> dict[str, Any]:
+    def __init__(self, llm_provider: LLMProvider | None = None) -> None:
+        self.llm_provider = llm_provider or MockLLMProvider()
+
+    def repair(
+        self,
+        reflection: dict[str, Any],
+        workspace_path: Path,
+        task: Task | None = None,
+        artifact_paths: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if _uses_llm(self.llm_provider) and task is not None:
+            try:
+                return self._repair_with_llm(task, reflection, workspace_path, artifact_paths or {})
+            except (json.JSONDecodeError, ValueError, LLMProviderError, OSError) as exc:
+                _record_provider_fallback(self.llm_provider, f"LLM repair fallback: {exc}")
         failure_types = _normalize_failure_types(list(reflection.get("likely_failure_types", [])))
         plan: dict[str, Any] = {
             "repairs_attempted": failure_types,
@@ -37,6 +56,40 @@ class Repairer:
                 plan["details"].append(f"No automated repair available for {failure_type}.")
 
         return plan
+
+    def _repair_with_llm(
+        self,
+        task: Task,
+        reflection: dict[str, Any],
+        workspace_path: Path,
+        artifact_paths: dict[str, Any],
+    ) -> dict[str, Any]:
+        before = _snapshot_workspace_files(workspace_path)
+        prompt = _repair_prompt(task, reflection, before, artifact_paths)
+        files = _parse_repair_files(self.llm_provider.complete(prompt))
+        if not files:
+            raise ValueError("LLM repair returned no files")
+
+        files_touched: list[str] = []
+        for relative_path, content in files.items():
+            target = _safe_workspace_path(workspace_path, relative_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            files_touched.append(relative_path)
+
+        touched = sorted(set(files_touched))
+        diffs = _diff_touched_files(workspace_path, before, touched)
+        if not diffs:
+            raise ValueError("LLM repair did not modify any files")
+        return {
+            "repairs_attempted": ["llm_repair"],
+            "repairs_applied": ["llm_repair"],
+            "files_modified": [str((workspace_path / path).resolve()) for path in touched if path in diffs],
+            "details": ["Applied LLM full-file repair."],
+            "diffs": {str((workspace_path / path).resolve()): diff for path, diff in diffs.items()},
+            "skipped_repair_types": [],
+            "llm_repair": True,
+        }
 
     def _apply_with_record(self, plan: dict[str, Any], repair_type: str, workspace_path: Path, repair: Any) -> None:
         changed, files, details, diffs = repair(workspace_path)
@@ -347,3 +400,143 @@ def _write_if_changed(target: Path, before: str, after: str, detail: str) -> tup
         )
     )
     return True, [str(target)], [detail], {str(target): diff}
+
+
+def _uses_llm(provider: LLMProvider) -> bool:
+    return getattr(provider, "provider_name", "mock") != "mock"
+
+
+def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    record = getattr(provider, "record_fallback", None)
+    if callable(record):
+        record(reason)
+
+
+def _snapshot_workspace_files(workspace_path: Path) -> dict[str, str]:
+    ignored_parts = {"node_modules", "dist", "build", ".git"}
+    snapshots: dict[str, str] = {}
+    for path in sorted(workspace_path.rglob("*")):
+        if not path.is_file():
+            continue
+        relative_path = str(path.relative_to(workspace_path))
+        if ignored_parts.intersection(Path(relative_path).parts):
+            continue
+        if not relative_path.endswith((".jsx", ".js", ".css", ".html", ".json")):
+            continue
+        content = path.read_text(encoding="utf-8")
+        if len(content) <= 40_000:
+            snapshots[relative_path] = content
+    return snapshots
+
+
+def _diff_touched_files(workspace_path: Path, before: dict[str, str], files_touched: list[str]) -> dict[str, str]:
+    diffs: dict[str, str] = {}
+    for relative_path in files_touched:
+        target = workspace_path / relative_path
+        if not target.exists():
+            continue
+        before_text = before.get(relative_path, "")
+        after_text = target.read_text(encoding="utf-8")
+        if before_text == after_text:
+            continue
+        from_file = f"a/{relative_path}" if relative_path in before else "/dev/null"
+        diffs[relative_path] = "".join(
+            difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=from_file,
+                tofile=f"b/{relative_path}",
+            )
+        )
+    return diffs
+
+
+def _safe_workspace_path(workspace_path: Path, relative_path: str) -> Path:
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Unsafe LLM repair path: {relative_path}")
+    target = (workspace_path / path).resolve()
+    workspace = workspace_path.resolve()
+    if workspace not in target.parents and target != workspace:
+        raise ValueError(f"Unsafe LLM repair path outside workspace: {relative_path}")
+    if any(part in {"node_modules", "dist", "build", ".git"} for part in path.parts):
+        raise ValueError(f"Unsafe generated artifact path: {relative_path}")
+    return target
+
+
+def _repair_prompt(
+    task: Task,
+    reflection: dict[str, Any],
+    files: dict[str, str],
+    artifact_paths: dict[str, Any],
+) -> str:
+    return f"""Repair this WebPilot workspace using the smallest safe full-file replacements.
+
+Return strict JSON only with this schema:
+{{
+  "files": [
+    {{"path": "relative/path.ext", "content": "complete replacement file content"}}
+  ],
+  "reasoning": "brief explanation"
+}}
+
+Rules:
+- Return only files that must be modified or added.
+- Do not touch node_modules, dist, build, package-lock files, or unrelated files.
+- Preserve the Vite/React project structure.
+- Prefer targeted edits that address the reflection.
+
+Task:
+{json.dumps(task.to_dict(), indent=2)}
+
+Reflection:
+{json.dumps(reflection, indent=2)}
+
+Artifact paths:
+{json.dumps(artifact_paths, indent=2)}
+
+Current workspace files:
+{json.dumps(files, indent=2)}
+"""
+
+
+def _parse_repair_files(raw: str) -> dict[str, str]:
+    data = json.loads(_strip_json_fence(raw))
+    if not isinstance(data, dict):
+        raise ValueError("repair output must be a JSON object")
+    raw_files = data.get("files")
+    files: dict[str, str] = {}
+    if isinstance(raw_files, dict):
+        iterator = raw_files.items()
+    elif isinstance(raw_files, list):
+        iterator = []
+        for item in raw_files:
+            if not isinstance(item, dict):
+                raise ValueError("repair files list items must be objects")
+            iterator.append((item.get("path"), item.get("content")))
+    else:
+        raise ValueError("repair output must include files")
+
+    for relative_path, content in iterator:
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ValueError("repair file path must be a non-empty string")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"repair content for {relative_path} must be non-empty")
+        if len(content) > 100_000:
+            raise ValueError(f"repair content for {relative_path} is too large")
+        files[relative_path] = content
+    if len(files) > 16:
+        raise ValueError("LLM repair returned too many files")
+    return files
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
