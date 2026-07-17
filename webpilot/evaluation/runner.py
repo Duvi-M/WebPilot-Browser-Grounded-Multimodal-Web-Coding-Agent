@@ -25,6 +25,9 @@ def main() -> None:
     parser.add_argument("--allow-paid-batch", action="store_true")
     parser.add_argument("--dry-run-llm", action="store_true")
     parser.add_argument("--max-llm-calls", type=int, default=None)
+    parser.add_argument("--llm-coder", action="store_true")
+    parser.add_argument("--llm-reflector", action="store_true")
+    parser.add_argument("--llm-repair", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -36,6 +39,9 @@ def main() -> None:
             allow_paid_batch=args.allow_paid_batch,
             dry_run_llm=args.dry_run_llm,
             max_llm_calls=args.max_llm_calls,
+            llm_coder=args.llm_coder,
+            llm_reflector=args.llm_reflector,
+            llm_repair=args.llm_repair,
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -51,6 +57,9 @@ def run_evaluation(
     allow_paid_batch: bool = False,
     dry_run_llm: bool = False,
     max_llm_calls: int | None = None,
+    llm_coder: bool = False,
+    llm_reflector: bool = False,
+    llm_repair: bool = False,
 ) -> Path:
     if not tasks_dir.exists() or not tasks_dir.is_dir():
         raise ValueError(f"Tasks directory does not exist: {tasks_dir}")
@@ -70,6 +79,9 @@ def run_evaluation(
             variant=variant,
             max_iterations=max_iterations,
             llm_provider=_create_llm_provider(llm_provider_name, dry_run_llm, max_llm_calls),
+            llm_coder=llm_coder,
+            llm_reflector=llm_reflector,
+            llm_repair=llm_repair,
         ).run(task)
         summary = result.summary
         rows.append(
@@ -89,6 +101,7 @@ def run_evaluation(
                 "llm_calls_attempted": summary.get("llm_calls_attempted"),
                 "llm_calls_completed": summary.get("llm_calls_completed"),
                 "dry_run_llm": summary.get("dry_run_llm"),
+                "llm_agents": summary.get("llm_agents"),
             }
         )
 

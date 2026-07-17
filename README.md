@@ -35,6 +35,7 @@ Expected outcome: a local research prototype that can create or copy a front-end
 - Heuristic `patch_quality` scoring for repair/editing tasks.
 - Basic `visual_sanity_score` smoke heuristic for nonblank rendered pages and mobile overflow signals.
 - Optional OpenAI-backed planning with prompt logging, dry-run mode, and call budgets.
+- Optional LLM-backed coding, reflection, and repair agents with deterministic fallback.
 - `base` and `browser-feedback` variants.
 - A small evaluation runner over JSON tasks.
 - Written evaluation report at `evaluation/report.md`.
@@ -47,7 +48,7 @@ Out of scope for this MVP: general-purpose editing, vision-guided generation, vi
 - Editing currently handles only a fixed set of deterministic requested-change patterns: add testimonials, add FAQ, add newsletter signup, add a simple CTA button, add a secondary CTA button, and update simple CTA text/color. It is not a general code editing engine yet.
 - Mock dashboard generation covers static sidebar/stats/table layouts, but not sorting, filtering, pagination, charts, or live data.
 - Mock blog generation covers a static article plus related-posts sidebar, not a general publishing system.
-- With `--llm-provider openai`, the agent can use OpenAI for structured planning while keeping deterministic coding and repair as the safe default for now.
+- With `--llm-provider openai`, the agent can use OpenAI for structured planning. Optional `--llm-coder`, `--llm-reflector`, and `--llm-repair` flags enable LLM-backed coding, reflection, and repair independently. Deterministic implementations remain the fallback.
 - Chromium is launched with sandbox workaround args by default: `--no-sandbox` and `--disable-setuid-sandbox`. Set `WEBPILOT_DISABLE_CHROMIUM_SANDBOX_ARGS=1` to disable those args on systems where the browser sandbox works normally.
 - `patch_quality` is a heuristic proxy, not an LLM-judged or human-judged score. It combines localization, diff size, and targetedness. `visual_sanity_score` is also a basic heuristic, not a visual judge. `visual_quality` is still the paper-aligned multimodal-judge placeholder and currently returns `None`.
 - Generated repairs are deterministic string edits, not robust AST-aware code transformations.
@@ -134,6 +135,47 @@ python3 -m webpilot.evaluation.runner \
 ```
 
 The current OpenAI integration is intentionally narrow: it is used for structured planning first. Deterministic coding and deterministic safe repairs remain the default execution path.
+
+## LLM Agent Architecture
+
+WebPilot keeps provider access separate from agent behavior:
+
+```text
+Task
+  -> optional RetrievalService hook, future work
+  -> prompt builder inside the selected agent
+  -> LLMProvider
+  -> validated structured output
+  -> deterministic fallback on any failure
+```
+
+The current agent roles are:
+
+- `Planner`: produces structured plans. OpenAI planning is enabled by `--llm-provider openai`.
+- `Coder`: deterministic by default. `--llm-coder` lets the selected provider generate full Vite/React workspaces for generation tasks or full-file replacements for editing tasks.
+- `Reflector`: deterministic by default. `--llm-reflector` sends task context, execution summary, failed tests, console/page errors, DOM summary, screenshot paths, and previous iteration summary to the selected provider and expects strict JSON.
+- `Repairer`: deterministic by default. `--llm-repair` asks the selected provider for targeted full-file replacements and applies only safe workspace-local paths.
+
+All LLM outputs are validated. If a call times out, returns invalid JSON, exceeds the call budget, fails authentication, hits a rate limit, or proposes unsafe/no-op changes, WebPilot records the fallback reason and continues with the deterministic implementation.
+
+Example dry-run with all LLM agents enabled:
+
+```bash
+python3 -m webpilot.cli run \
+  --task webpilot/tasks/sample_text_generation.json \
+  --variant browser-feedback \
+  --max-iterations 1 \
+  --llm-provider openai \
+  --dry-run-llm \
+  --max-llm-calls 3 \
+  --llm-coder \
+  --llm-reflector \
+  --llm-repair
+```
+
+This does not call the API. It logs prompt artifacts and exercises the fallback path. For a real tiny run, remove `--dry-run-llm` and keep a low `--max-llm-calls`.
+
+RAG integration is intentionally not implemented yet. The new `AgentRuntimeContext` / `RetrievedContext` interfaces reserve a place for retrieval before each prompt is built, without making OpenAIProvider or the deterministic agents own retrieval logic.
 
 ## Run Browser Feedback
 
