@@ -56,6 +56,19 @@ def test_llm_coder_invalid_json_falls_back_to_deterministic(tmp_path: Path) -> N
     assert provider.usage_summary()["llm_fallback_used"] is True
 
 
+def test_llm_coder_blocks_lockfile_replacements(tmp_path: Path) -> None:
+    task = Task.load("webpilot/tasks/sample_text_generation.json")
+    plan = Planner().plan(task)
+    files = {"package-lock.json": "{}\n"}
+    files.update(_vite_file_map("<h1>LLM generated</h1>"))
+    provider = ScriptedProvider([json.dumps(files)])
+
+    result = Coder(provider).code(task, plan, tmp_path / "workspace")
+
+    assert not (result.workspace_path / "package-lock.json").exists()
+    assert result.message == "Generated a Vite + React workspace."
+
+
 def test_llm_reflector_returns_structured_context(tmp_path: Path) -> None:
     provider = ScriptedProvider(
         [
@@ -98,6 +111,26 @@ def test_llm_repair_applies_safe_full_file_replacement(tmp_path: Path) -> None:
     assert result["repairs_applied"] == ["llm_repair"]
     assert (workspace / "src" / "App.jsx").read_text(encoding="utf-8") == repaired
     assert result["diffs"]
+
+
+def test_llm_repair_blocks_lockfile_replacements(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "App.jsx").write_text("export default function App() { return <p>Broken</p>; }\n", encoding="utf-8")
+    provider = ScriptedProvider([json.dumps({"files": [{"path": "package-lock.json", "content": "{}\n"}]})])
+    task = Task.load("webpilot/tasks/sample_diagnostic_repair.json")
+
+    result = Repairer(provider).repair({"likely_failure_types": ["no_automated_repair_available"]}, workspace, task=task)
+
+    assert not (workspace / "package-lock.json").exists()
+    assert "llm_repair" not in result["repairs_applied"]
+
+
+def test_llm_validation_counter_task_is_available() -> None:
+    task = Task.load("webpilot/tasks/llm_validation/sample_counter.json")
+
+    assert task.id == "llm_validation_counter"
+    assert "Increment" in task.instruction
 
 
 class ScriptedProvider(LLMProvider):

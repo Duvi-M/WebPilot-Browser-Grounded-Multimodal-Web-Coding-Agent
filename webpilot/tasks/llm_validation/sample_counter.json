@@ -1,0 +1,14 @@
+{
+  "id": "llm_validation_counter",
+  "type": "text_generation",
+  "instruction": "Build a tiny Vite React counter app. The first screen must show the heading \"LLM validation counter\", a visible count starting at 0, and a button labeled \"Increment\". Clicking Increment must increase the visible count by 1 without navigation.",
+  "expected_behaviors": [
+    "The heading LLM validation counter is visible.",
+    "A count starts at 0.",
+    "Clicking the Increment button increases the visible count."
+  ],
+  "test_hints": [
+    "Use Playwright to click the Increment button and verify the visible count changes from 0 to 1.",
+    "Keep the React/Vite project minimal."
+  ]
+}

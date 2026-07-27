@@ -52,16 +52,24 @@ class Planner:
 
     def _plan_with_llm(self, task: Task) -> Plan:
         prompt = _plan_prompt(task, retry=False)
+        _set_provider_agent(self.llm_provider, "planner")
         try:
-            return _parse_plan_json(self.llm_provider.complete(prompt))
+            plan = _parse_plan_json(self.llm_provider.complete(prompt))
+            _record_provider_validation(self.llm_provider, "passed")
+            return plan
         except (json.JSONDecodeError, ValueError, LLMProviderError) as first_error:
+            _record_provider_validation(self.llm_provider, "failed", str(first_error))
             if _falls_back_without_retry(self.llm_provider):
                 _record_provider_fallback(self.llm_provider, f"LLM planner fallback after first failure: {first_error}")
                 return self._plan_deterministically(task)
             retry_prompt = _plan_prompt(task, retry=True, previous_error=str(first_error))
             try:
-                return _parse_plan_json(self.llm_provider.complete(retry_prompt))
+                _set_provider_agent(self.llm_provider, "planner")
+                plan = _parse_plan_json(self.llm_provider.complete(retry_prompt))
+                _record_provider_validation(self.llm_provider, "passed")
+                return plan
             except (json.JSONDecodeError, ValueError, LLMProviderError) as second_error:
+                _record_provider_validation(self.llm_provider, "failed", str(second_error))
                 if _falls_back_without_retry(self.llm_provider):
                     _record_provider_fallback(self.llm_provider, f"LLM planner fallback after retry failure: {second_error}")
                     return self._plan_deterministically(task)
@@ -330,6 +338,18 @@ def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
     record = getattr(provider, "record_fallback", None)
     if callable(record):
         record(reason)
+
+
+def _record_provider_validation(provider: LLMProvider, status: str, error: str | None = None) -> None:
+    record = getattr(provider, "record_validation", None)
+    if callable(record):
+        record(status, error)
+
+
+def _set_provider_agent(provider: LLMProvider, agent_name: str) -> None:
+    setter = getattr(provider, "set_agent_name", None)
+    if callable(setter):
+        setter(agent_name)
 
 
 def _plan_prompt(task: Task, retry: bool, previous_error: str | None = None) -> str:

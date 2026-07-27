@@ -52,6 +52,9 @@ def main() -> None:
         except ImportError as exc:
             print(f"Error: missing dependency: {exc}", file=sys.stderr)
             raise SystemExit(1) from None
+        except KeyboardInterrupt:
+            print("Interrupted by user.", file=sys.stderr)
+            raise SystemExit(130) from None
 
 
 def run_task(

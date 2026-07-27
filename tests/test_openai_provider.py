@@ -62,6 +62,12 @@ def test_openai_provider_dry_run_logs_prompt_without_api_key(tmp_path: Path, mon
     assert Path(artifact_paths["response"]).read_text(encoding="utf-8").startswith("[DRY RUN]")
     metadata = json.loads(Path(artifact_paths["metadata"]).read_text(encoding="utf-8"))
     assert metadata["status"] == "dry_run"
+    assert metadata["agent_name"] == "planner"
+    assert metadata["validation_status"] == "failed"
+    assert metadata["fallback_used"] is True
+    assert metadata["latency_ms"] is not None
+    assert metadata["retry_count"] == 0
+    assert metadata["token_usage"] is None
 
 
 def test_openai_malformed_plan_json_falls_back_to_deterministic_plan(tmp_path: Path) -> None:
@@ -80,6 +86,11 @@ def test_openai_malformed_plan_json_falls_back_to_deterministic_plan(tmp_path: P
     assert usage["llm_calls_completed"] == 1
     assert usage["llm_fallback_used"] is True
     assert usage["llm_errors"]
+    artifact_paths = usage["llm_call_artifact_paths"][0]
+    metadata = json.loads(Path(artifact_paths["metadata"]).read_text(encoding="utf-8"))
+    assert metadata["agent_name"] == "planner"
+    assert metadata["validation_status"] == "failed"
+    assert metadata["fallback_used"] is True
 
 
 def test_openai_provider_retries_transient_transport_errors() -> None:
@@ -95,6 +106,73 @@ def test_openai_provider_retries_transient_transport_errors() -> None:
 
     assert provider.complete("retry") == "ok after retry"
     assert calls["count"] == 3
+
+
+def test_openai_provider_records_metadata_and_does_not_log_api_key(tmp_path: Path) -> None:
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        assert headers["Authorization"] == "Bearer secret-test-key"
+        return {
+            "id": "chatcmpl-test",
+            "model": "test-model",
+            "choices": [{"message": {"content": "hello"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    provider = OpenAIProvider(api_key="secret-test-key", model="test-model", transport=transport, max_retries=0)
+    provider.set_agent_name("coder")
+    provider.set_run_context(tmp_path / "llm_calls")
+
+    assert provider.complete("Say hello") == "hello"
+    provider.record_validation("passed")
+
+    paths = provider.usage_summary()["llm_call_artifact_paths"][0]
+    prompt_text = Path(paths["prompt"]).read_text(encoding="utf-8")
+    response_text = Path(paths["response"]).read_text(encoding="utf-8")
+    metadata_text = Path(paths["metadata"]).read_text(encoding="utf-8")
+    metadata = json.loads(metadata_text)
+
+    assert "secret-test-key" not in prompt_text
+    assert "secret-test-key" not in response_text
+    assert "secret-test-key" not in metadata_text
+    assert metadata["agent_name"] == "coder"
+    assert metadata["model"] == "test-model"
+    assert metadata["prompt_path"] == paths["prompt"]
+    assert metadata["response_path"] == paths["response"]
+    assert metadata["validation_status"] == "passed"
+    assert metadata["fallback_used"] is False
+    assert metadata["token_usage"]["total_tokens"] == 5
+    assert metadata["latency_ms"] is not None
+    assert metadata["call_index"] == 1
+    assert metadata["cost"] is None
+
+
+def test_openai_provider_rejects_oversized_response(tmp_path: Path) -> None:
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "x" * 11}}]}
+
+    provider = OpenAIProvider(
+        api_key="test-key",
+        transport=transport,
+        max_retries=0,
+        max_response_chars=10,
+    )
+    provider.set_run_context(tmp_path / "llm_calls")
+
+    with pytest.raises(LLMProviderError, match="MAX_RESPONSE_CHARS"):
+        provider.complete("too much")
+
+
+def test_openai_provider_uses_attempted_calls_as_hard_budget() -> None:
+    provider = OpenAIProvider(dry_run=True, max_llm_calls=1)
+
+    with pytest.raises(LLMProviderError, match="dry-run"):
+        provider.complete("first")
+    with pytest.raises(LLMProviderError, match="budget exhausted"):
+        provider.complete("second")
+
+    usage = provider.usage_summary()
+    assert usage["llm_calls_attempted"] == 1
+    assert usage["llm_calls_completed"] == 0
 
 
 def test_openai_provider_does_not_retry_auth_errors() -> None:

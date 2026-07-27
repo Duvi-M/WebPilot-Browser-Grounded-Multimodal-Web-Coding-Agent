@@ -98,6 +98,7 @@ export OPENAI_API_KEY="sk-..."
 export WEBPILOT_OPENAI_MODEL="gpt-4o-mini"
 export WEBPILOT_OPENAI_MAX_TOKENS="1200"
 export WEBPILOT_OPENAI_TEMPERATURE="0.2"
+export WEBPILOT_OPENAI_MAX_RESPONSE_CHARS="200000"
 ```
 
 Always inspect prompts with dry-run mode before spending credits. Dry-run logs prompt artifacts under `runs/<task_id>/<timestamp>/iteration_0/llm_calls/` and does not call the API:

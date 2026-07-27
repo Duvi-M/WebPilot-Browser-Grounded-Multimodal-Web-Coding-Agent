@@ -35,6 +35,8 @@ class InteractionTester:
             results.append(self._safe("tabs_switch_content", lambda: self._tabs_switch_content(page)))
         if _mentions(source, "blog", "article", "related posts"):
             results.append(self._safe("blog_expected_content", lambda: self._blog_content(page)))
+        if _mentions(source, "counter", "increment", "count increases"):
+            results.append(self._safe("counter_increments", lambda: self._counter_increments(page)))
         results.append(self._safe("buttons_exist", lambda: self._buttons_exist(page)))
         results.append(self._safe("buttons_clickable_no_page_error", lambda: self._buttons_clickable(page)))
         if _mentions(source, "form", "contact", "email", "message"):
@@ -146,6 +148,21 @@ class InteractionTester:
         after_errors = len(page.context._webpilot_page_errors) if hasattr(page.context, "_webpilot_page_errors") else before_errors
         passed = after_errors == before_errors
         return TestResult("buttons_clickable_no_page_error", passed, f"Trial-clicked {count} button-like elements.")
+
+    def _counter_increments(self, page: Any) -> TestResult:
+        body_before = page.locator("body").inner_text(timeout=2000)
+        button = page.locator('button:has-text("Increment"), button:has-text("+"), [role=button]:has-text("Increment")').first
+        if button.count() == 0:
+            return TestResult("counter_increments", False, "No increment button found.")
+        numbers_before = [int(value) for value in re.findall(r"\b\d+\b", body_before)]
+        button.click(timeout=2000)
+        page.wait_for_timeout(250)
+        body_after = page.locator("body").inner_text(timeout=2000)
+        numbers_after = [int(value) for value in re.findall(r"\b\d+\b", body_after)]
+        increased = any(after > before for before, after in zip(numbers_before, numbers_after))
+        if increased or body_after != body_before and "1" in body_after:
+            return TestResult("counter_increments", True, "Clicking Increment increased the visible count.")
+        return TestResult("counter_increments", False, "Clicking Increment did not increase a visible numeric count.")
 
     def _form_fields(self, page: Any) -> TestResult:
         selectors = {

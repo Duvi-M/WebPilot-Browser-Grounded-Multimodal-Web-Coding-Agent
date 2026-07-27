@@ -66,7 +66,9 @@ class Repairer:
     ) -> dict[str, Any]:
         before = _snapshot_workspace_files(workspace_path)
         prompt = _repair_prompt(task, reflection, before, artifact_paths)
+        _set_provider_agent(self.llm_provider, "repairer")
         files = _parse_repair_files(self.llm_provider.complete(prompt))
+        _record_provider_validation(self.llm_provider, "passed")
         if not files:
             raise ValueError("LLM repair returned no files")
 
@@ -407,9 +409,22 @@ def _uses_llm(provider: LLMProvider) -> bool:
 
 
 def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    _record_provider_validation(provider, "failed", reason)
     record = getattr(provider, "record_fallback", None)
     if callable(record):
         record(reason)
+
+
+def _record_provider_validation(provider: LLMProvider, status: str, error: str | None = None) -> None:
+    record = getattr(provider, "record_validation", None)
+    if callable(record):
+        record(status, error)
+
+
+def _set_provider_agent(provider: LLMProvider, agent_name: str) -> None:
+    setter = getattr(provider, "set_agent_name", None)
+    if callable(setter):
+        setter(agent_name)
 
 
 def _snapshot_workspace_files(workspace_path: Path) -> dict[str, str]:
@@ -420,6 +435,8 @@ def _snapshot_workspace_files(workspace_path: Path) -> dict[str, str]:
             continue
         relative_path = str(path.relative_to(workspace_path))
         if ignored_parts.intersection(Path(relative_path).parts):
+            continue
+        if _is_disallowed_llm_path(relative_path):
             continue
         if not relative_path.endswith((".jsx", ".js", ".css", ".html", ".json")):
             continue
@@ -459,9 +476,21 @@ def _safe_workspace_path(workspace_path: Path, relative_path: str) -> Path:
     workspace = workspace_path.resolve()
     if workspace not in target.parents and target != workspace:
         raise ValueError(f"Unsafe LLM repair path outside workspace: {relative_path}")
-    if any(part in {"node_modules", "dist", "build", ".git"} for part in path.parts):
+    if _is_disallowed_llm_path(relative_path):
         raise ValueError(f"Unsafe generated artifact path: {relative_path}")
     return target
+
+
+def _is_disallowed_llm_path(relative_path: str) -> bool:
+    path = Path(relative_path)
+    lockfiles = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
+    if path.name in lockfiles:
+        return True
+    if path.name == ".env" or path.name.startswith(".env."):
+        return True
+    if any(part in {"node_modules", "dist", "build", ".git"} for part in path.parts):
+        return True
+    return False
 
 
 def _repair_prompt(

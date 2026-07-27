@@ -11,7 +11,12 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from webpilot.config import DEFAULT_OPENAI_MAX_TOKENS, DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_TEMPERATURE
+from webpilot.config import (
+    DEFAULT_OPENAI_MAX_RESPONSE_CHARS,
+    DEFAULT_OPENAI_MAX_TOKENS,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_TEMPERATURE,
+)
 from webpilot.llm.base import LLMProvider, LLMProviderError, MissingAPIKeyError
 
 
@@ -33,6 +38,7 @@ class OpenAIProvider(LLMProvider):
         max_llm_calls: int | None = 1,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
+        max_response_chars: int | None = None,
         transport: Transport | None = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
@@ -49,6 +55,11 @@ class OpenAIProvider(LLMProvider):
         self.max_llm_calls = max_llm_calls
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        self.max_response_chars = (
+            max_response_chars
+            if max_response_chars is not None
+            else _env_int("WEBPILOT_OPENAI_MAX_RESPONSE_CHARS", DEFAULT_OPENAI_MAX_RESPONSE_CHARS)
+        )
         self.transport = transport or _default_transport
         self.calls_attempted = 0
         self.calls_completed = 0
@@ -56,14 +67,23 @@ class OpenAIProvider(LLMProvider):
         self.call_artifact_paths: list[dict[str, str]] = []
         self.fallback_used = False
         self._llm_calls_dir: Path | None = None
+        self._agent_name = "unknown"
+        self._last_metadata_path: Path | None = None
 
     def set_run_context(self, llm_calls_dir: Path) -> None:
         self._llm_calls_dir = llm_calls_dir
+
+    def set_agent_name(self, agent_name: str) -> None:
+        self._agent_name = agent_name
+
+    def record_validation(self, status: str, error: str | None = None) -> None:
+        self._update_latest_metadata({"validation_status": status, "validation_error": error})
 
     def record_fallback(self, reason: str) -> None:
         self.fallback_used = True
         if reason and reason not in self.errors:
             self.errors.append(reason)
+        self._update_latest_metadata({"fallback_used": True, "fallback_reason": reason})
 
     def usage_summary(self) -> dict[str, Any]:
         return {
@@ -71,6 +91,9 @@ class OpenAIProvider(LLMProvider):
             "openai_model": self.model,
             "dry_run_llm": self.dry_run,
             "max_llm_calls": self.max_llm_calls,
+            "openai_max_tokens": self.max_tokens,
+            "openai_max_response_chars": self.max_response_chars,
+            "openai_timeout_seconds": self.timeout_seconds,
             "llm_calls_attempted": self.calls_attempted,
             "llm_calls_completed": self.calls_completed,
             "llm_call_artifact_paths": self.call_artifact_paths,
@@ -80,14 +103,14 @@ class OpenAIProvider(LLMProvider):
 
     def complete(self, prompt: str) -> str:
         system_message = "You are a precise coding-agent component. Return only the requested content."
-        if self.max_llm_calls is not None and self.calls_completed >= self.max_llm_calls:
-            self.calls_attempted += 1
+        if self.max_llm_calls is not None and self.calls_attempted >= self.max_llm_calls:
             message = f"OpenAI call budget exhausted: max_llm_calls={self.max_llm_calls}"
             self.errors.append(message)
             raise LLMProviderError(message)
 
         self.calls_attempted += 1
         call_index = self.calls_attempted
+        retry_count = 0
         payload = {
             "model": self.model,
             "messages": [
@@ -98,10 +121,18 @@ class OpenAIProvider(LLMProvider):
             "max_tokens": self.max_tokens,
         }
         prompt_path, response_path, metadata_path = self._write_call_start(call_index, prompt, system_message)
+        started = time.monotonic()
 
         if self.dry_run:
             response_text = "[DRY RUN] OpenAI API call skipped. Prompt was logged for inspection."
-            metadata = self._metadata(call_index, status="dry_run", prompt_path=prompt_path, response_path=response_path)
+            metadata = self._metadata(
+                call_index,
+                status="dry_run",
+                prompt_path=prompt_path,
+                response_path=response_path,
+                latency_ms=_latency_ms(started),
+                retry_count=retry_count,
+            )
             self._write_call_end(response_path, metadata_path, response_text, metadata)
             message = "OpenAI dry-run recorded prompt; no API call was made"
             self.errors.append(message)
@@ -117,6 +148,10 @@ class OpenAIProvider(LLMProvider):
             try:
                 response = self.transport("https://api.openai.com/v1/chat/completions", payload, headers, self.timeout_seconds)
                 content = _extract_message_content(response)
+                if len(content) > self.max_response_chars:
+                    raise LLMProviderError(
+                        f"OpenAI response exceeded WEBPILOT_OPENAI_MAX_RESPONSE_CHARS={self.max_response_chars}"
+                    )
                 self.calls_completed += 1
                 metadata = self._metadata(
                     call_index,
@@ -124,6 +159,8 @@ class OpenAIProvider(LLMProvider):
                     prompt_path=prompt_path,
                     response_path=response_path,
                     provider_metadata=_provider_metadata(response),
+                    latency_ms=_latency_ms(started),
+                    retry_count=retry_count,
                 )
                 self._write_call_end(response_path, metadata_path, content, metadata)
                 return content
@@ -131,25 +168,78 @@ class OpenAIProvider(LLMProvider):
                 raise
             except _AuthProviderError as exc:
                 self.errors.append(str(exc))
-                self._write_call_end(response_path, metadata_path, "", self._metadata(call_index, "failed", prompt_path, response_path, error=str(exc)))
+                self._write_call_end(
+                    response_path,
+                    metadata_path,
+                    "",
+                    self._metadata(
+                        call_index,
+                        "failed",
+                        prompt_path,
+                        response_path,
+                        error=str(exc),
+                        latency_ms=_latency_ms(started),
+                        retry_count=retry_count,
+                    ),
+                )
                 raise LLMProviderError(str(exc)) from exc
             except _TransientProviderError as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     break
+                retry_count += 1
                 time.sleep(0.5 * (attempt + 1))
             except LLMProviderError as exc:
                 self.errors.append(str(exc))
-                self._write_call_end(response_path, metadata_path, "", self._metadata(call_index, "failed", prompt_path, response_path, error=str(exc)))
+                self._write_call_end(
+                    response_path,
+                    metadata_path,
+                    "",
+                    self._metadata(
+                        call_index,
+                        "failed",
+                        prompt_path,
+                        response_path,
+                        error=str(exc),
+                        latency_ms=_latency_ms(started),
+                        retry_count=retry_count,
+                    ),
+                )
                 raise
             except Exception as exc:
                 self.errors.append(f"OpenAI provider failed: {exc}")
-                self._write_call_end(response_path, metadata_path, "", self._metadata(call_index, "failed", prompt_path, response_path, error=str(exc)))
+                self._write_call_end(
+                    response_path,
+                    metadata_path,
+                    "",
+                    self._metadata(
+                        call_index,
+                        "failed",
+                        prompt_path,
+                        response_path,
+                        error=str(exc),
+                        latency_ms=_latency_ms(started),
+                        retry_count=retry_count,
+                    ),
+                )
                 raise LLMProviderError(f"OpenAI provider failed: {exc}") from exc
 
         message = f"OpenAI provider failed after retries: {last_error}"
         self.errors.append(message)
-        self._write_call_end(response_path, metadata_path, "", self._metadata(call_index, "failed", prompt_path, response_path, error=message))
+        self._write_call_end(
+            response_path,
+            metadata_path,
+            "",
+            self._metadata(
+                call_index,
+                "failed",
+                prompt_path,
+                response_path,
+                error=message,
+                latency_ms=_latency_ms(started),
+                retry_count=retry_count,
+            ),
+        )
         raise LLMProviderError(message) from last_error
 
     def _write_call_start(self, call_index: int, prompt: str, system_message: str) -> tuple[Path | None, Path | None, Path | None]:
@@ -163,6 +253,7 @@ class OpenAIProvider(LLMProvider):
         prompt_path.write_text(f"System:\n{system_message}\n\nUser:\n{prompt}", encoding="utf-8")
         metadata = self._metadata(call_index, status="started", prompt_path=prompt_path, response_path=response_path)
         metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self._last_metadata_path = metadata_path
         self.call_artifact_paths.append(
             {
                 "prompt": str(prompt_path),
@@ -183,6 +274,7 @@ class OpenAIProvider(LLMProvider):
             response_path.write_text(response_text.rstrip() + "\n", encoding="utf-8")
         if metadata_path is not None:
             metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            self._last_metadata_path = metadata_path
 
     def _metadata(
         self,
@@ -192,15 +284,27 @@ class OpenAIProvider(LLMProvider):
         response_path: Path | None,
         error: str | None = None,
         provider_metadata: dict[str, Any] | None = None,
+        latency_ms: int | None = None,
+        retry_count: int = 0,
     ) -> dict[str, Any]:
+        usage = provider_metadata.get("usage") if provider_metadata else None
         metadata: dict[str, Any] = {
             "call_index": call_index,
+            "agent_name": self._agent_name,
             "provider": self.provider_name,
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "max_response_chars": self.max_response_chars,
+            "timeout_seconds": self.timeout_seconds,
+            "retry_count": retry_count,
             "dry_run": self.dry_run,
             "status": status,
+            "validation_status": "not_validated",
+            "fallback_used": False,
+            "token_usage": usage,
+            "latency_ms": latency_ms,
+            "cost": None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "prompt_path": str(prompt_path) if prompt_path is not None else None,
             "response_path": str(response_path) if response_path is not None else None,
@@ -210,6 +314,16 @@ class OpenAIProvider(LLMProvider):
         if error is not None:
             metadata["error"] = error
         return metadata
+
+    def _update_latest_metadata(self, updates: dict[str, Any]) -> None:
+        if self._last_metadata_path is None or not self._last_metadata_path.exists():
+            return
+        try:
+            metadata = json.loads(self._last_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        metadata.update(updates)
+        self._last_metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 class _TransientProviderError(LLMProviderError):
@@ -266,6 +380,10 @@ def _provider_metadata(response: dict[str, Any]) -> dict[str, Any]:
         if key in response:
             metadata[key] = response[key]
     return metadata
+
+
+def _latency_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
 
 
 def _env_int(name: str, default: int) -> int:

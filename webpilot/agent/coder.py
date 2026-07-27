@@ -174,7 +174,9 @@ class Coder:
     def _generate_react_app_with_llm(self, task: Task, plan: Plan, workspace_path: Path) -> CoderResult:
         workspace_path.mkdir(parents=True, exist_ok=True)
         prompt = _code_prompt(task, plan)
+        _set_provider_agent(self.llm_provider, "coder")
         files = _parse_file_map(self.llm_provider.complete(prompt), require_vite_files=True)
+        _record_provider_validation(self.llm_provider, "passed")
 
         generated: list[str] = []
         for relative_path, content in files.items():
@@ -192,7 +194,9 @@ class Coder:
     def _apply_edit_with_llm(self, task: Task, plan: Plan, workspace_path: Path) -> dict[str, Any]:
         before = _snapshot_workspace_files(workspace_path)
         prompt = _edit_prompt(task, plan, before)
+        _set_provider_agent(self.llm_provider, "coder")
         files = _parse_file_map(self.llm_provider.complete(prompt), require_vite_files=False)
+        _record_provider_validation(self.llm_provider, "passed")
         if not files:
             raise ValueError("LLM edit returned no files")
 
@@ -272,6 +276,8 @@ def _snapshot_workspace_files(workspace_path: Path) -> dict[str, str]:
             continue
         relative_path = str(path.relative_to(workspace_path))
         if ignored_parts.intersection(Path(relative_path).parts):
+            continue
+        if _is_disallowed_llm_path(relative_path):
             continue
         snapshots[relative_path] = path.read_text(encoding="utf-8")
     return snapshots
@@ -1318,9 +1324,22 @@ def _uses_llm(provider: LLMProvider) -> bool:
 
 
 def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    _record_provider_validation(provider, "failed", reason)
     record = getattr(provider, "record_fallback", None)
     if callable(record):
         record(reason)
+
+
+def _record_provider_validation(provider: LLMProvider, status: str, error: str | None = None) -> None:
+    record = getattr(provider, "record_validation", None)
+    if callable(record):
+        record(status, error)
+
+
+def _set_provider_agent(provider: LLMProvider, agent_name: str) -> None:
+    setter = getattr(provider, "set_agent_name", None)
+    if callable(setter):
+        setter(agent_name)
 
 
 def _code_prompt(task: Task, plan: Plan) -> str:
@@ -1402,11 +1421,25 @@ def _safe_workspace_path(workspace_path: Path, relative_path: str) -> Path:
     path = Path(relative_path)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"Unsafe LLM file path: {relative_path}")
+    if _is_disallowed_llm_path(relative_path):
+        raise ValueError(f"Unsafe LLM file path: {relative_path}")
     target = (workspace_path / path).resolve()
     workspace = workspace_path.resolve()
     if workspace not in target.parents and target != workspace:
         raise ValueError(f"Unsafe LLM file path outside workspace: {relative_path}")
     return target
+
+
+def _is_disallowed_llm_path(relative_path: str) -> bool:
+    path = Path(relative_path)
+    lockfiles = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
+    if path.name in lockfiles:
+        return True
+    if path.name == ".env" or path.name.startswith(".env."):
+        return True
+    if any(part in {"node_modules", "dist", "build", ".git"} for part in path.parts):
+        return True
+    return False
 
 
 def _strip_json_fence(raw: str) -> str:

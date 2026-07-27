@@ -71,7 +71,9 @@ class Reflector:
 
         prompt = _reflection_prompt(task, evidence, test_results, deterministic, previous_iteration_summary)
         try:
+            _set_provider_agent(self.llm_provider, "reflector")
             parsed = _parse_reflection_json(self.llm_provider.complete(prompt))
+            _record_provider_validation(self.llm_provider, "passed")
         except (json.JSONDecodeError, ValueError, LLMProviderError) as exc:
             _record_provider_fallback(self.llm_provider, f"LLM reflector fallback: {exc}")
             deterministic["llm_reflection_fallback"] = True
@@ -124,9 +126,22 @@ def _uses_llm(provider: LLMProvider) -> bool:
 
 
 def _record_provider_fallback(provider: LLMProvider, reason: str) -> None:
+    _record_provider_validation(provider, "failed", reason)
     record = getattr(provider, "record_fallback", None)
     if callable(record):
         record(reason)
+
+
+def _record_provider_validation(provider: LLMProvider, status: str, error: str | None = None) -> None:
+    record = getattr(provider, "record_validation", None)
+    if callable(record):
+        record(status, error)
+
+
+def _set_provider_agent(provider: LLMProvider, agent_name: str) -> None:
+    setter = getattr(provider, "set_agent_name", None)
+    if callable(setter):
+        setter(agent_name)
 
 
 def _reflection_prompt(
